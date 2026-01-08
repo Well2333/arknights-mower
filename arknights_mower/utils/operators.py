@@ -927,7 +927,8 @@ class Operator:
     ):
         if refresh_order_room is not None:
             self.refresh_order_room = refresh_order_room
-        self.refresh_order_room = [False, []]
+        else:
+            self.refresh_order_room = [False, []]
         self.refresh_drained = refresh_drained
         self.name = name
         self.room = room
@@ -958,10 +959,8 @@ class Operator:
     def current_room(self, value):
         if self._current_room != value:
             self._current_room = value
-            if (
-                Operators.current_room_changed_callback
-                and self.refresh_order_room[0]
-                or self.refresh_drained
+            if Operators.current_room_changed_callback and (
+                self.refresh_order_room[0] or self.refresh_drained
             ):
                 Operators.current_room_changed_callback(self)
 
