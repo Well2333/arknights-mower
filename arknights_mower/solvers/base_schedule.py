@@ -224,6 +224,7 @@ class BaseSchedulerSolver(SceneGraphSolver, BaseMixin):
         else:
             msg = f"无法完成 {self.task.meta_data} 的排班，如果重复接收此邮件请检查替换组是否被占用"
             send_message(msg, level="ERROR")
+            logger.error(msg)
             # 简单暴力一点，移除所有非回满的
             # 智能情况的话，得在人数和替换冲突中做出选择
             required = 0
