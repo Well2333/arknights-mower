@@ -242,7 +242,11 @@ if (return_home_when_idle.value) {
                 <span>ADB路径</span>
                 <help-text>
                   <div>MuMu12：<code>模拟器路径\\shell\\adb.exe</code></div>
-                  <div>蓝叠Air（macOS）：Homebrew 安装后通常位于 <code>/opt/homebrew/bin/adb</code>（Intel 机器为 <code>/usr/local/bin/adb</code>）</div>
+                  <div>
+                    蓝叠Air（macOS）：Homebrew 安装后通常位于
+                    <code>/opt/homebrew/bin/adb</code>（Intel 机器为
+                    <code>/usr/local/bin/adb</code>）
+                  </div>
                 </help-text>
               </template>
               <n-input type="textarea" :autosize="true" v-model:value="maa_adb_path" />

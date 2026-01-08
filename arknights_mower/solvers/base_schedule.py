@@ -103,6 +103,7 @@ class BaseSchedulerSolver(SceneGraphSolver, BaseMixin):
         self.ideal_resting_count = 4
         self.choose_error = set()
         self.drop_send = False
+        self.global_plan = {}
 
     def find_next_task(
         self,
