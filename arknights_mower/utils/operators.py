@@ -675,6 +675,9 @@ class Operators:
         operator.rest_in_full = self.config.is_rest_in_full(operator.name)
         operator.workaholic = self.config.is_workaholic(operator.name)
         operator.refresh_order_room = self.config.is_refresh_trading(operator.name)
+        logger.debug(
+            f"设置 {operator.name} 刷新交易房间: {operator.refresh_order_room}"
+        )
         operator.refresh_drained = self.config.is_refresh_drained(operator.name)
         if operator.name in agent_arrange_order:
             operator.arrange_order = agent_arrange_order[operator.name]
@@ -927,6 +930,7 @@ class Operator:
     ):
         if refresh_order_room is not None:
             self.refresh_order_room = refresh_order_room
+            logger.debug(f"设置{self.name}刷新交易所房间为{self.refresh_order_room}")
         else:
             self.refresh_order_room = [False, []]
         self.refresh_drained = refresh_drained
@@ -963,6 +967,9 @@ class Operator:
                 self.refresh_order_room[0] or self.refresh_drained
             ):
                 Operators.current_room_changed_callback(self)
+                logger.debug(
+                    f"触发当前房间变更回调: {self.name} 现在在 {self._current_room}, 刷新交易所房间: {self.refresh_order_room}, 刷新疲劳: {self.refresh_drained}"
+                )
 
     def is_high(self):
         # 是否为高效组
