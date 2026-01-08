@@ -134,17 +134,6 @@ class Operators:
                         default_plan[key][idx] = operator
         return default_plan, ext_config.merge_config(plan.config)
 
-    def generate_conditions(self, n):
-        if n == 1:
-            return [[True], [False]]
-        else:
-            prev_conditions = self.generate_conditions(n - 1)
-            conditions = []
-            for condition in prev_conditions:
-                conditions.append(condition + [True])
-                conditions.append(condition + [False])
-            return conditions
-
     def init_and_validate(self, update=False):
         self.groups = {}
         self.exhaust_agent = set()

@@ -1,5 +1,6 @@
 import os
 from datetime import datetime
+from itertools import product
 
 from arknights_mower.solvers.base_schedule import BaseSchedulerSolver
 from arknights_mower.solvers.reclamation_algorithm import ReclamationAlgorithm
@@ -173,18 +174,76 @@ def simulate(saved):
     if validation_msg is not None:
         logger.error(validation_msg)
         return
-    if len(base_scheduler.op_data.backup_plans) > 0:
-        conditions = base_scheduler.op_data.generate_conditions(
-            len(base_scheduler.op_data.backup_plans)
-        )
-        for con in conditions:
-            validation_msg = base_scheduler.op_data.swap_plan(con, True)
+    backup_count = len(base_scheduler.op_data.backup_plans)
+    if backup_count > 0:
+        def collect_agents(plan: Plan) -> set[str]:
+            agents = set()
+            for room_info in plan.plan.values():
+                for op in room_info:
+                    if op.agent not in ("Current", "Free"):
+                        agents.add(op.agent)
+            return agents
+
+        agent_sets = [collect_agents(plan) for plan in base_scheduler.op_data.backup_plans]
+        adjacency = [set() for _ in range(backup_count)]
+        for i in range(backup_count):
+            for j in range(i + 1, backup_count):
+                if agent_sets[i].intersection(agent_sets[j]):
+                    adjacency[i].add(j)
+                    adjacency[j].add(i)
+
+        components: list[list[int]] = []
+        visited = [False] * backup_count
+        for i in range(backup_count):
+            if visited[i]:
+                continue
+            stack = [i]
+            component = []
+            while stack:
+                node = stack.pop()
+                if visited[node]:
+                    continue
+                visited[node] = True
+                component.append(node)
+                stack.extend(adjacency[node])
+            components.append(component)
+
+        tested_conditions: set[tuple[bool, ...]] = set()
+        tested_sequence: list[tuple[bool, ...]] = []
+
+        def validate_condition(condition: list[bool]) -> bool:
+            key = tuple(condition)
+            if key in tested_conditions:
+                return True
+            tested_conditions.add(key)
+            tested_sequence.append(key)
+            logger.debug(f"验证副表条件：{condition}")
+            validation_msg = base_scheduler.op_data.swap_plan(condition, True)
             if validation_msg is not None:
-                logger.error(f"替换排班验证错误：{validation_msg}, 附表条件为 {con}")
-                return
-        base_scheduler.op_data.swap_plan(
-            [False] * len(base_scheduler.op_data.backup_plans), True
-        )
+                logger.info(f"替换排班验证错误：{validation_msg}, 附表条件为 {condition}")
+                return False
+            return True
+
+        if not validate_condition([False] * backup_count):
+            return
+
+        for component in components:
+            size = len(component)
+            for combo in product([False, True], repeat=size):
+                if not any(combo):
+                    continue
+                condition = [False] * backup_count
+                for idx, flag in enumerate(combo):
+                    condition[component[idx]] = flag
+                if not validate_condition(condition):
+                    return
+        if tested_sequence:
+            logger.info(
+                f"副表条件共验证 {len(tested_sequence)} 次：{tested_sequence}"
+            )
+
+            
+        base_scheduler.op_data.swap_plan([False] * backup_count, True)
     timezone_offset = config.conf.timezone_offset
     if saved:
         try:
