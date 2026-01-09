@@ -3287,7 +3287,8 @@ class BaseSchedulerSolver(SceneGraphSolver, BaseMixin):
                                 self.back()
                                 self.turn_on_room_detail(room)
                         elif self.task.adjusted:
-                            pass
+                            self.back()
+                            self.turn_on_room_detail(room)
                         else:
                             logger.info("检测到漏单")
                             send_message("检测到漏单！", level="WARNING")
