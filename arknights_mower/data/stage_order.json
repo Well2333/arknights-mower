@@ -75,12 +75,12 @@
         "sortWithinYear": 11
     },
     {
-        "name": "离解复合",
+        "name": "",
         "sortByYear": 6,
         "sortWithinYear": 10
     },
     {
-        "name": "反常光谱",
+        "name": "",
         "sortByYear": 7,
         "sortWithinYear": 4
     },
@@ -333,6 +333,11 @@
         "name": "红丝绒",
         "sortByYear": 7,
         "sortWithinYear": 1
+    },
+    {
+        "name": "雅赛努斯复仇记",
+        "sortByYear": 7,
+        "sortWithinYear": 7
     },
     {
         "name": "战地秘闻",

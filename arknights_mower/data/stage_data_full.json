@@ -1,18 +1,18 @@
 [
   {
-    "id": "UR-1",
-    "name": "嘈杂的天空",
+    "id": "ME-1",
+    "name": "工作与时日",
     "drop": [
       {
         "occPercent": 0,
         "type": "ACTIVITY_ITEM",
-        "id": "act47side_token_bottle",
+        "id": "act48side_token_ostracon",
         "dropType": 8
       },
       {
         "occPercent": 0,
         "type": "ACTIVITY_ITEM",
-        "id": "act47side_token_bottle",
+        "id": "act48side_token_ostracon",
         "dropType": 2
       },
       {
@@ -58,32 +58,32 @@
         "dropType": 8
       }
     ],
-    "zoneId": "act47side_zone1",
+    "zoneId": "act48side_zone1",
     "apCost": 9,
     "difficulty": "NORMAL",
     "diffGroup": "NONE",
-    "zoneNameSecond": "未许之地",
-    "subTitle": "天空生活展会",
+    "zoneNameSecond": "雅赛努斯复仇记",
+    "subTitle": "神殿仪式",
     "stageType": "ACTIVITY",
     "endTs": {
-      "startTs": 1764889200,
-      "endTs": 1766087999
+      "startTs": 1767913200,
+      "endTs": 1769111999
     }
   },
   {
-    "id": "UR-2",
-    "name": "擅闯者",
+    "id": "ME-2",
+    "name": "命定的终点",
     "drop": [
       {
         "occPercent": 0,
         "type": "ACTIVITY_ITEM",
-        "id": "act47side_token_bottle",
+        "id": "act48side_token_ostracon",
         "dropType": 8
       },
       {
         "occPercent": 0,
         "type": "ACTIVITY_ITEM",
-        "id": "act47side_token_bottle",
+        "id": "act48side_token_ostracon",
         "dropType": 2
       },
       {
@@ -129,32 +129,32 @@
         "dropType": 8
       }
     ],
-    "zoneId": "act47side_zone1",
+    "zoneId": "act48side_zone1",
     "apCost": 9,
     "difficulty": "NORMAL",
     "diffGroup": "NONE",
-    "zoneNameSecond": "未许之地",
-    "subTitle": "天空生活展会",
+    "zoneNameSecond": "雅赛努斯复仇记",
+    "subTitle": "神殿仪式",
     "stageType": "ACTIVITY",
     "endTs": {
-      "startTs": 1764889200,
-      "endTs": 1766087999
+      "startTs": 1767913200,
+      "endTs": 1769111999
     }
   },
   {
-    "id": "UR-3",
-    "name": "跌落保护",
+    "id": "ME-3",
+    "name": "无解的谜题",
     "drop": [
       {
         "occPercent": 0,
         "type": "ACTIVITY_ITEM",
-        "id": "act47side_token_bottle",
+        "id": "act48side_token_ostracon",
         "dropType": 8
       },
       {
         "occPercent": 0,
         "type": "ACTIVITY_ITEM",
-        "id": "act47side_token_bottle",
+        "id": "act48side_token_ostracon",
         "dropType": 2
       },
       {
@@ -166,7 +166,7 @@
       {
         "occPercent": 3,
         "type": "MATERIAL",
-        "id": "30052",
+        "id": "30062",
         "dropType": 2
       },
       {
@@ -176,32 +176,79 @@
         "dropType": 8
       }
     ],
-    "zoneId": "act47side_zone1",
+    "zoneId": "act48side_zone1",
     "apCost": 12,
     "difficulty": "NORMAL",
     "diffGroup": "NONE",
-    "zoneNameSecond": "未许之地",
-    "subTitle": "天空生活展会",
+    "zoneNameSecond": "雅赛努斯复仇记",
+    "subTitle": "神殿仪式",
     "stageType": "ACTIVITY",
     "endTs": {
-      "startTs": 1764889200,
-      "endTs": 1766087999
+      "startTs": 1767913200,
+      "endTs": 1769111999
     }
   },
   {
-    "id": "UR-4",
-    "name": "晴空湍流",
+    "id": "ME-4",
+    "name": "失手",
     "drop": [
       {
         "occPercent": 0,
         "type": "ACTIVITY_ITEM",
-        "id": "act47side_token_bottle",
+        "id": "act48side_token_ostracon",
         "dropType": 8
       },
       {
         "occPercent": 0,
         "type": "ACTIVITY_ITEM",
-        "id": "act47side_token_bottle",
+        "id": "act48side_token_ostracon",
+        "dropType": 2
+      },
+      {
+        "occPercent": 0,
+        "type": "MATERIAL",
+        "id": "30032",
+        "dropType": 2
+      },
+      {
+        "occPercent": 3,
+        "type": "MATERIAL",
+        "id": "30042",
+        "dropType": 2
+      },
+      {
+        "occPercent": 0,
+        "type": "DIAMOND",
+        "id": "4002",
+        "dropType": 8
+      }
+    ],
+    "zoneId": "act48side_zone1",
+    "apCost": 12,
+    "difficulty": "NORMAL",
+    "diffGroup": "NONE",
+    "zoneNameSecond": "雅赛努斯复仇记",
+    "subTitle": "神殿仪式",
+    "stageType": "ACTIVITY",
+    "endTs": {
+      "startTs": 1767913200,
+      "endTs": 1769111999
+    }
+  },
+  {
+    "id": "ME-5",
+    "name": "汇流",
+    "drop": [
+      {
+        "occPercent": 0,
+        "type": "ACTIVITY_ITEM",
+        "id": "act48side_token_ostracon",
+        "dropType": 8
+      },
+      {
+        "occPercent": 0,
+        "type": "ACTIVITY_ITEM",
+        "id": "act48side_token_ostracon",
         "dropType": 2
       },
       {
@@ -211,9 +258,9 @@
         "dropType": 2
       },
       {
-        "occPercent": 3,
+        "occPercent": 2,
         "type": "MATERIAL",
-        "id": "30052",
+        "id": "30032",
         "dropType": 2
       },
       {
@@ -223,44 +270,79 @@
         "dropType": 8
       }
     ],
-    "zoneId": "act47side_zone1",
+    "zoneId": "act48side_zone1",
     "apCost": 12,
     "difficulty": "NORMAL",
     "diffGroup": "NONE",
-    "zoneNameSecond": "未许之地",
-    "subTitle": "天空生活展会",
+    "zoneNameSecond": "雅赛努斯复仇记",
+    "subTitle": "神殿仪式",
     "stageType": "ACTIVITY",
     "endTs": {
-      "startTs": 1764889200,
-      "endTs": 1766087999
+      "startTs": 1767913200,
+      "endTs": 1769111999
     }
   },
   {
-    "id": "UR-5",
-    "name": "注目礼",
+    "id": "ME-6",
+    "name": "旧日诗篇",
     "drop": [
       {
         "occPercent": 0,
         "type": "ACTIVITY_ITEM",
-        "id": "act47side_token_bottle",
+        "id": "act48side_token_ostracon",
         "dropType": 8
       },
       {
         "occPercent": 0,
         "type": "ACTIVITY_ITEM",
-        "id": "act47side_token_bottle",
+        "id": "act48side_token_ostracon",
         "dropType": 2
       },
       {
         "occPercent": 0,
         "type": "MATERIAL",
-        "id": "30012",
+        "id": "30013",
+        "dropType": 2
+      },
+      {
+        "occPercent": 0,
+        "type": "DIAMOND",
+        "id": "4002",
+        "dropType": 8
+      }
+    ],
+    "zoneId": "act48side_zone1",
+    "apCost": 21,
+    "difficulty": "NORMAL",
+    "diffGroup": "NONE",
+    "zoneNameSecond": "雅赛努斯复仇记",
+    "subTitle": "神殿仪式",
+    "stageType": "ACTIVITY",
+    "endTs": {
+      "startTs": 1767913200,
+      "endTs": 1769111999
+    }
+  },
+  {
+    "id": "ME-7",
+    "name": "奔袭",
+    "drop": [
+      {
+        "occPercent": 0,
+        "type": "ACTIVITY_ITEM",
+        "id": "act48side_token_ostracon",
+        "dropType": 8
+      },
+      {
+        "occPercent": 0,
+        "type": "ACTIVITY_ITEM",
+        "id": "act48side_token_ostracon",
         "dropType": 2
       },
       {
         "occPercent": 2,
         "type": "MATERIAL",
-        "id": "30022",
+        "id": "30043",
         "dropType": 2
       },
       {
@@ -270,79 +352,38 @@
         "dropType": 8
       }
     ],
-    "zoneId": "act47side_zone1",
-    "apCost": 12,
-    "difficulty": "NORMAL",
-    "diffGroup": "NONE",
-    "zoneNameSecond": "未许之地",
-    "subTitle": "天空生活展会",
-    "stageType": "ACTIVITY",
-    "endTs": {
-      "startTs": 1764889200,
-      "endTs": 1766087999
-    }
-  },
-  {
-    "id": "UR-6",
-    "name": "交叉航线",
-    "drop": [
-      {
-        "occPercent": 0,
-        "type": "ACTIVITY_ITEM",
-        "id": "act47side_token_bottle",
-        "dropType": 8
-      },
-      {
-        "occPercent": 0,
-        "type": "ACTIVITY_ITEM",
-        "id": "act47side_token_bottle",
-        "dropType": 2
-      },
-      {
-        "occPercent": 1,
-        "type": "MATERIAL",
-        "id": "30033",
-        "dropType": 2
-      },
-      {
-        "occPercent": 0,
-        "type": "DIAMOND",
-        "id": "4002",
-        "dropType": 8
-      }
-    ],
-    "zoneId": "act47side_zone1",
+    "zoneId": "act48side_zone1",
     "apCost": 21,
     "difficulty": "NORMAL",
     "diffGroup": "NONE",
-    "zoneNameSecond": "未许之地",
-    "subTitle": "天空生活展会",
+    "zoneNameSecond": "雅赛努斯复仇记",
+    "subTitle": "神殿仪式",
     "stageType": "ACTIVITY",
     "endTs": {
-      "startTs": 1764889200,
-      "endTs": 1766087999
+      "startTs": 1767913200,
+      "endTs": 1769111999
     }
   },
   {
-    "id": "UR-7",
-    "name": "停机坪",
+    "id": "ME-8",
+    "name": "神谕示显",
     "drop": [
       {
         "occPercent": 0,
         "type": "ACTIVITY_ITEM",
-        "id": "act47side_token_bottle",
+        "id": "act48side_token_ostracon",
         "dropType": 8
       },
       {
         "occPercent": 0,
         "type": "ACTIVITY_ITEM",
-        "id": "act47side_token_bottle",
+        "id": "act48side_token_ostracon",
         "dropType": 2
       },
       {
-        "occPercent": 1,
+        "occPercent": 2,
         "type": "MATERIAL",
-        "id": "31023",
+        "id": "31093",
         "dropType": 2
       },
       {
@@ -352,62 +393,21 @@
         "dropType": 8
       }
     ],
-    "zoneId": "act47side_zone1",
+    "zoneId": "act48side_zone1",
     "apCost": 21,
     "difficulty": "NORMAL",
     "diffGroup": "NONE",
-    "zoneNameSecond": "未许之地",
-    "subTitle": "天空生活展会",
+    "zoneNameSecond": "雅赛努斯复仇记",
+    "subTitle": "神殿仪式",
     "stageType": "ACTIVITY",
     "endTs": {
-      "startTs": 1764889200,
-      "endTs": 1766087999
+      "startTs": 1767913200,
+      "endTs": 1769111999
     }
   },
   {
-    "id": "UR-8",
-    "name": "栖脚地",
-    "drop": [
-      {
-        "occPercent": 0,
-        "type": "ACTIVITY_ITEM",
-        "id": "act47side_token_bottle",
-        "dropType": 8
-      },
-      {
-        "occPercent": 0,
-        "type": "ACTIVITY_ITEM",
-        "id": "act47side_token_bottle",
-        "dropType": 2
-      },
-      {
-        "occPercent": 1,
-        "type": "MATERIAL",
-        "id": "31033",
-        "dropType": 2
-      },
-      {
-        "occPercent": 0,
-        "type": "DIAMOND",
-        "id": "4002",
-        "dropType": 8
-      }
-    ],
-    "zoneId": "act47side_zone1",
-    "apCost": 21,
-    "difficulty": "NORMAL",
-    "diffGroup": "NONE",
-    "zoneNameSecond": "未许之地",
-    "subTitle": "天空生活展会",
-    "stageType": "ACTIVITY",
-    "endTs": {
-      "startTs": 1764889200,
-      "endTs": 1766087999
-    }
-  },
-  {
-    "id": "UR-TR-1",
-    "name": "高空适应症",
+    "id": "ME-TR-1",
+    "name": "入境随俗",
     "drop": [
       {
         "occPercent": 0,
@@ -416,16 +416,16 @@
         "dropType": 8
       }
     ],
-    "zoneId": "act47side_zone1",
+    "zoneId": "act48side_zone1",
     "apCost": 0,
     "difficulty": "NORMAL",
     "diffGroup": "NONE",
-    "zoneNameSecond": "未许之地",
-    "subTitle": "天空生活展会",
+    "zoneNameSecond": "雅赛努斯复仇记",
+    "subTitle": "神殿仪式",
     "stageType": "ACTIVITY",
     "endTs": {
-      "startTs": 1764889200,
-      "endTs": 1766087999
+      "startTs": 1767913200,
+      "endTs": 1769111999
     }
   },
   {
