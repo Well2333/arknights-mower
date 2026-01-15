@@ -7,6 +7,7 @@
 Usage:
     python gen_server_requirements.py requirements.txt requirements-server.txt
 """
+
 from __future__ import annotations
 
 import sys
