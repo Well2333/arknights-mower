@@ -14,8 +14,15 @@ ARCH="$(uname -m)"
 if [ -n "${MOWER_TOKEN:-}" ] && [ "${MOWER_TOKEN}" != "PLEASE_CHANGE_ME" ]; then
     TOKEN="${MOWER_TOKEN}"
 else
-    RAND_STR=$(cat /dev/urandom | tr -dc 'a-zA-Z0-9' | fold -w 12 | head -n 1)
-    TOKEN="mower${RAND_STR}"
+  RAND_STR="$(python - <<'PY'
+import secrets
+import string
+
+alphabet = string.ascii_letters + string.digits
+print(''.join(secrets.choice(alphabet) for _ in range(12)))
+PY
+)"
+  TOKEN="mower${RAND_STR}"
     echo "🎲 生成随机 Token: ${TOKEN}"
 fi
 
@@ -26,6 +33,7 @@ if [ -n "${HTTP_PROXY}" ]; then
   if curl -s --connect-timeout 3 --proxy "${HTTP_PROXY}" http://httpbin.org/ip >/dev/null 2>&1; then
     echo "✅ 代理连接正常"
     export HTTP_PROXY="${HTTP_PROXY}"
+    export HTTPS_PROXY="${HTTP_PROXY}"
   elif curl -s --connect-timeout 3 http://httpbin.org/ip >/dev/null 2>&1; then
     echo "⚠️  代理不可达，将尝试直连"
     unset HTTP_PROXY
@@ -61,15 +69,19 @@ echo "🔑 webui token: ${TOKEN}"
 echo "🔍 检查MAA目录是否存在或为空..."
 if [ ! -d "${MAA_DIR}" ] || [ -z "$(ls -A "${MAA_DIR}" 2>/dev/null)" ]; then
   echo "⬇️ 下载并安装最新版本的Maa..."
-  url=$(curl -s https://api.github.com/repos/MaaAssistantArknights/MaaAssistantArknights/releases/latest \
-    | jq -r --arg arch "${ARCH}" '.assets[] | select(.name | contains("linux") and contains($arch) and contains("tar")) | .browser_download_url' \
-    | head -n 1)
+  url=$(curl -fsSL --connect-timeout 10 --max-time 30 https://api.github.com/repos/MaaAssistantArknights/MaaAssistantArknights/releases/latest \
+    | jq -r --arg arch "${ARCH}" '[.assets[] | select(.name | contains("linux") and contains($arch) and contains("tar")) | .browser_download_url][0] // empty')
   if [ -z "${url}" ]; then
-    echo "❌ 无法找到MaaAssistantArknights下载链接" >&2
+    echo "❌ 无法找到MaaAssistantArknights下载链接, 请检查网络连接或代理设置" >&2
     exit 1
   fi
   tmp_tar="/tmp/maa.tar.gz"
-  curl -L -o "${tmp_tar}" "${url}"
+  echo "⬇️ 下载地址: ${url}"
+  curl -L --no-buffer --progress-bar -o "${tmp_tar}" "${url}" 2>&1 | tr '\r' '\n' >&2
+  if [ ! -f "${tmp_tar}" ]; then
+    echo "❌ 下载失败, 如果持续出现此问题，您可以通过上方下载链接手动下载并解压到 ${MAA_DIR} 对应的文件夹中" >&2
+    exit 1
+  fi
   mkdir -p "${MAA_DIR}"
   tar -xzf "${tmp_tar}" -C "${MAA_DIR}"
   rm -f "${tmp_tar}"

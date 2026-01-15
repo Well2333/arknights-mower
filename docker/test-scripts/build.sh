@@ -12,7 +12,7 @@ HOST_IP=$(ip route get 1.1.1.1 | awk '{print $7; exit}' 2>/dev/null || echo "hos
 export HTTP_PROXY=http://${HOST_IP}:7890
 export HTTPS_PROXY=http://${HOST_IP}:7890
 
-DOCKER_USERNAME=${DOCKER_USERNAME:-"well404"}
+DOCKER_USERNAME=${DOCKER_USERNAME:-"dockertest"}
 
 echo "🌐 使用代理: ${HTTP_PROXY}"
 
