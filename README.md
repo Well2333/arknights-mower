@@ -85,42 +85,33 @@ pyinstaller webui_zip_for_linux.spec
 
 注：Linux下运行，shell会显示如 `Running on http://127.0.0.1:53703`的输出，本地浏览器访问`http://127.0.0.1:53703`即进入mower的页面。
 
-## Linux系统下的Docker一键部署
+## Docker 部署 (Linux)
 
-### 运行环境准备
+> 如果您希望手动自行构建镜像，请查看 [docker/README.md](docker/README.md)。
 
-Docker version 28.1.128.1.1 、Linux
+1. 下载 [docker-compose.yml](./docker/docker-compose.yml)
 
-### 克隆仓库
+    请按照其中的注释配置好相关环境变量等设置。
 
-```bash
-git clone -c lfs.concurrenttransfers=200 https://github.com/ArkMowers/arknights-mower.git --branch 2025.6.1
-cd arknights-mower
-```
+    其中 `MOWER_TOKEN` 为 webui 的访问令牌，会强制覆盖配置文件中的 token 设置（若不设置则随机生成，需在日志中查看）
 
-### 镜像构建
+    ```bash
+    docker compose logs -f
+    ```
 
-```bash
-docker build -t mower .
-```
+2. 启动容器
 
-### 启动容器
+   ```bash
+   docker compose up -d
+   ```
 
-```bash
-docker run -d \
-    --name mower\
-    --network host \
-    -e TZ="Asia/Shanghai" \
-    --restart always \
-    --memory 2g \
-    mower
-```
+   这将自动拉取 `arkmower/arknights-mower:latest` 镜像并启动。
 
-### 进入Mower
+3. 访问 Mower
 
-容器在后台启动以后，可以本地浏览器访问`http://127.0.0.1:58000?token=mower`或`http://局域网IP:58000?token=mower`。
+   在浏览器访问：`http://本机IP:58000?token=<你的设置的MOWER_TOKEN>`
 
-此时，该容器已预先配置好maa以及adb设置，仅需要手动配置adb连接地址。
+    此时，该容器已预先配置好maa以及adb设置，仅需要手动配置adb连接地址（即模拟器远程ADB地址）。
 
 ## 建议与反馈
 

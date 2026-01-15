@@ -49,6 +49,7 @@ echo ""
 echo "🚀 测试运行:"
 SERVER_PORT=58010
 echo "docker run --rm \
+    -e TZ=Asia/Shanghai \
     -e MOWER_PORT=${SERVER_PORT} \
     -e MOWER_TOKEN=mowertest \
     -e HTTP_PROXY=${HTTP_PROXY} \
@@ -60,8 +61,8 @@ echo "docker run --rm \
 echo ""
 
 echo "🧹 清理无用镜像/缓存 (可选):"
-echo "   docker image prune -f            # 移除未被容器使用的悬空镜像"
-echo "   docker builder prune -f          # 仅清理未使用的构建缓存"
+echo "   docker image prune -a        # 移除未被容器使用的悬空镜像"
+echo "   docker builder prune -a      # 仅清理未使用的构建缓存"
 echo ""
 
 echo "🎉 构建完成！应用镜像已准备就绪"

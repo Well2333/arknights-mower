@@ -1,14 +1,23 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# 设置变量
 PORT="${MOWER_PORT:-58000}"
-TOKEN="${MOWER_TOKEN:-mower$(head /dev/urandom | tr -dc 'a-zA-Z0-9' | fold -w 8 | head -n 1)}"
 HTTP_PROXY="${HTTP_PROXY:-}"
 MAA_DIR="/MAA"
 DATA_DIR="/mower-data"
 ADB_BIN="${MOWER_ADB_BIN:-/usr/bin/adb}"
 SIMULATOR_FOLDER="/simulator"
 ARCH="$(uname -m)"
+
+# Token 处理
+if [ -n "${MOWER_TOKEN:-}" ] && [ "${MOWER_TOKEN}" != "PLEASE_CHANGE_ME" ]; then
+    TOKEN="${MOWER_TOKEN}"
+else
+    RAND_STR=$(cat /dev/urandom | tr -dc 'a-zA-Z0-9' | fold -w 12 | head -n 1)
+    TOKEN="mower${RAND_STR}"
+    echo "🎲 生成随机 Token: ${TOKEN}"
+fi
 
 ## 代理环境变量
 if [ -n "${HTTP_PROXY}" ]; then
@@ -42,6 +51,7 @@ if [ ! -x "${ADB_BIN}" ]; then
   fi
 fi
 
+# 输出配置信息
 echo "📂 数据目录: ${DATA_DIR}"
 echo "🛠️ 使用的ADB: ${ADB_BIN}"
 echo "🎮 模拟器目录: ${SIMULATOR_FOLDER}"
