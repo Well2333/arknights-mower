@@ -48,10 +48,6 @@ fi
 mkdir -p "${DATA_DIR}"
 export MOWER_DATA_DIR="${DATA_DIR}"
 
-# 输出配置信息
-echo "📂 数据目录: ${DATA_DIR}"
-echo "🔑 webui token: ${TOKEN}"
-
 # 如果MAA目录不存在或为空，则下载并解压最新版本
 echo "🔍 检查MAA目录是否存在或为空..."
 if [ ! -d "${MAA_DIR}" ] || [ -z "$(ls -A "${MAA_DIR}" 2>/dev/null)" ]; then
@@ -93,4 +89,5 @@ config.save_conf()
 PY
 
 echo "🚀 启动Mower服务, 端口: ${PORT}, Token: ${TOKEN}"
+echo "🚀 访问地址 http://127.0.0.1:${PORT}/?token=${TOKEN}"
 exec python -m flask --app server:app run --host=0.0.0.0 --port="${PORT}"
