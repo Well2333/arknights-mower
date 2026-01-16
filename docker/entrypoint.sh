@@ -87,6 +87,10 @@ config.conf.webview.port = int(${PORT})
 config.conf.webview.tray = False
 config.save_conf()
 PY
+if [ $? -ne 0 ]; then
+  echo "❌ Mower 配置失败" >&2
+  exit 1
+fi
 
 echo "🚀 启动Mower服务, 端口: ${PORT}, Token: ${TOKEN}"
 echo "🚀 访问地址 http://127.0.0.1:${PORT}/?token=${TOKEN}"
