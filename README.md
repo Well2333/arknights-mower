@@ -87,7 +87,7 @@ pyinstaller webui_zip_for_linux.spec
 
 ## Docker 部署 (Linux)
 
-> 如果您希望手动自行构建镜像，请查看 [docker/README.md](docker/README.md)。
+> 此处仅演示使用 docker compose 部署流程
 
 1. 下载 [docker-compose.yml](./docker/docker-compose.yml)
 
@@ -99,7 +99,7 @@ pyinstaller webui_zip_for_linux.spec
     docker compose logs -f
     ```
 
-2. 启动容器
+2. 在 `docker-compose.yml` 路径下启动容器
 
    ```bash
    docker compose up -d
