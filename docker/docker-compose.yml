@@ -5,13 +5,11 @@ services:
     restart: unless-stopped
     environment:
       - TZ=Asia/Shanghai
-      # ⚠️ 重要设置 - Mower 配置项，将会强制覆盖已有配置文件
+      # ⚠️ 重要设置 - Mower 配置项，将会强制覆盖已有配置文件，请务必在此配置
       # ⚠️ Mower 访问令牌，若留空或保持默认则每回随机生成，可以查看启动日志获取
       - MOWER_TOKEN=PLEASE_CHANGE_ME
       # ⚠️ Mower 监听端口，需与下方端口映射一致
       - MOWER_PORT=58000
-      # 可选：可通过挂载自定义 adb 后改为 /opt/adb/adb，请配合下方数据卷使用
-      # - MOWER_ADB_BIN=/usr/bin/adb 
       # 非 Mower 配置项
       # 可选：设置 HTTP 代理，用于从海外源下载 MAA 等资源
       # - HTTP_PROXY=http://localhost:7890
@@ -23,9 +21,4 @@ services:
       - ./maa:/MAA
       # ⚠️ Mower 数据文件夹
       - ./mower-data:/mower-data
-      # 可选：挂载自定义 adb 并将 MOWER_ADB_BIN 指向 /opt/adb/adb，请配合上方环境变量使用
-      # - ./adb:/opt/adb:ro
-      # 可选：挂载模拟器目录至固定容器路径 /simulator
-      # - ./simulator:/simulator
-
     

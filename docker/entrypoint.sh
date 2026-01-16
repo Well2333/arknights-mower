@@ -6,8 +6,6 @@ PORT="${MOWER_PORT:-58000}"
 HTTP_PROXY="${HTTP_PROXY:-}"
 MAA_DIR="/MAA"
 DATA_DIR="/mower-data"
-ADB_BIN="${MOWER_ADB_BIN:-/usr/bin/adb}"
-SIMULATOR_FOLDER="/simulator"
 ARCH="$(uname -m)"
 
 # Token 处理
@@ -50,19 +48,8 @@ fi
 mkdir -p "${DATA_DIR}"
 export MOWER_DATA_DIR="${DATA_DIR}"
 
-# 检测ADB路径
-if [ ! -x "${ADB_BIN}" ]; then
-  if command -v "${ADB_BIN}" >/dev/null 2>&1; then
-    ADB_BIN="$(command -v "${ADB_BIN}")"
-  elif command -v adb >/dev/null 2>&1; then
-    ADB_BIN="$(command -v adb)"
-  fi
-fi
-
 # 输出配置信息
 echo "📂 数据目录: ${DATA_DIR}"
-echo "🛠️ 使用的ADB: ${ADB_BIN}"
-echo "🎮 模拟器目录: ${SIMULATOR_FOLDER}"
 echo "🔑 webui token: ${TOKEN}"
 
 # 如果MAA目录不存在或为空，则下载并解压最新版本
@@ -93,8 +80,12 @@ echo ""
 python - <<PY
 from arknights_mower.utils import config
 config.conf.maa_path = "${MAA_DIR}"
-config.conf.maa_adb_path = "${ADB_BIN}"
-config.conf.simulator.simulator_folder = "${SIMULATOR_FOLDER}"
+config.conf.maa_adb_path = "/usr/bin/adb"
+config.conf.simulator.name = ""
+config.conf.simulator.index = "-1"
+config.conf.simulator.simulator_folder = ""
+config.conf.simulator.wait_time = 30
+config.conf.simulator.hotkey = ""
 config.conf.webview.token = "${TOKEN}"
 config.conf.webview.port = int(${PORT})
 config.conf.webview.tray = False
