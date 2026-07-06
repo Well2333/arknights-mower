@@ -8,7 +8,11 @@ from arknights_mower.utils.logic_expression import LogicExpression
 from arknights_mower.utils.operators import Operator
 from arknights_mower.utils.plan import Plan, PlanConfig, Room
 from arknights_mower.utils.recognize import Scene
-from arknights_mower.utils.scheduler_task import TaskTypes, find_next_task
+from arknights_mower.utils.scheduler_task import (
+    SchedulerTask,
+    TaskTypes,
+    find_next_task,
+)
 
 with patch.dict("sys.modules", {"RecruitSolver": MagicMock()}):
     pass
@@ -386,6 +390,127 @@ class TestBaseScheduler(unittest.TestCase):
         self.assertTrue(
             any(task.type == TaskTypes.SELF_CORRECTION for task in solver.tasks)
         )
+
+
+class TestMergeRunOrder(unittest.TestCase):
+    def _make_run_order(self, time, room):
+        return SchedulerTask(
+            time=time, task_type=TaskTypes.RUN_ORDER, meta_data=room
+        )
+
+    @patch.object(BaseSchedulerSolver, "__init__", lambda x: None)
+    def test_merge_run_order_tasks_pulls_next_task_closer(self):
+        # 间隔20分钟的相邻跑单任务被拉近至阈值+余量处
+        solver = BaseSchedulerSolver()
+        # find_run_order_merge_pair 只处理未来任务，需以当前时间为基准
+        now = datetime.now()
+        prev = self._make_run_order(now + timedelta(minutes=10), "room_1_1")
+        nxt = self._make_run_order(now + timedelta(minutes=30), "room_1_2")
+        solver.tasks = [nxt, prev]
+        drone_calls = []
+
+        def fake_drone(room, adjust_time=False, merge_target=None):
+            drone_calls.append(room)
+            target_time, threshold_floor = merge_target
+            task = find_next_task(
+                solver.tasks, task_type=TaskTypes.RUN_ORDER, meta_data=room
+            )
+            task.time = target_time
+
+        with (
+            patch.object(base_schedule.config.conf, "run_order_delay", 3),
+            patch.object(
+                base_schedule.config.conf.run_order_grandet_mode, "merge_max_gap", 30
+            ),
+            patch.object(BaseSchedulerSolver, "drone", side_effect=fake_drone),
+        ):
+            solver.merge_run_order_tasks()
+
+        # conflict_threshold = max(5, 3) = 5，目标间隔为 5 + 2 分钟
+        self.assertEqual(drone_calls, ["room_1_2"])
+        self.assertEqual(nxt.time, prev.time + timedelta(minutes=7))
+        # 任务列表被重新排序
+        self.assertEqual(solver.tasks, [prev, nxt])
+
+    @patch.object(BaseSchedulerSolver, "__init__", lambda x: None)
+    def test_merge_run_order_tasks_stops_without_progress(self):
+        # 加速无进展（如无人机不足）时应停止，不会死循环
+        solver = BaseSchedulerSolver()
+        now = datetime.now()
+        prev = self._make_run_order(now + timedelta(minutes=10), "room_1_1")
+        nxt = self._make_run_order(now + timedelta(minutes=30), "room_1_2")
+        solver.tasks = [prev, nxt]
+
+        with (
+            patch.object(base_schedule.config.conf, "run_order_delay", 3),
+            patch.object(
+                base_schedule.config.conf.run_order_grandet_mode, "merge_max_gap", 30
+            ),
+            patch.object(BaseSchedulerSolver, "drone") as mock_drone,
+        ):
+            solver.merge_run_order_tasks()
+
+        self.assertEqual(mock_drone.call_count, 1)
+        self.assertEqual(nxt.time, now + timedelta(minutes=30))
+
+    @patch.object(BaseSchedulerSolver, "__init__", lambda x: None)
+    def test_merge_order_time_stops_above_threshold_floor(self):
+        # 无人机逐步加速订单，最终跑单时间不低于安全下限
+        solver = BaseSchedulerSolver()
+        now = datetime(2026, 7, 6, 10, 0)
+        prev_time = now + timedelta(minutes=10)
+        threshold_floor = prev_time + timedelta(minutes=5)
+        target_time = threshold_floor + timedelta(minutes=2)
+        task = self._make_run_order(now + timedelta(minutes=30), "room_1_2")
+        solver.tasks = [task]
+        solver.recog = MagicMock(w=1920, h=1080, gray=None)
+        solver.digit_reader = MagicMock()
+        solver.digit_reader.get_drone.return_value = 200
+        solver.waiting_scene = []
+        solver.scene = MagicMock(return_value=None)
+        solver.find = MagicMock(return_value=(0, 0))
+
+        # 模拟每台无人机减少 3 分钟订单时间
+        state = {"completion": now + timedelta(minutes=33), "presses": 0}
+        plus_coord = (1920 * 1320 // 1920, 1080 * 502 // 1080)
+
+        def fake_tap(pos, interval=None, **kwargs):
+            if pos == plus_coord:
+                state["presses"] += 1
+                state["completion"] -= timedelta(minutes=3)
+
+        solver.tap = fake_tap
+        solver.double_read_time = lambda *args, **kwargs: state["completion"]
+
+        with (
+            patch.object(base_schedule.config.conf, "run_order_delay", 3),
+            patch.object(base_schedule.config.conf, "drone_count_limit", 100),
+        ):
+            solver.merge_order_time((0, 0), "room_1_2", target_time, threshold_floor)
+
+        self.assertGreaterEqual(task.time, threshold_floor)
+        self.assertLessEqual(task.time, target_time)
+        self.assertGreater(state["presses"], 0)
+
+    @patch.object(BaseSchedulerSolver, "__init__", lambda x: None)
+    def test_merge_order_time_respects_drone_count_limit(self):
+        # 无人机数量不高于使用阈值时不加速
+        solver = BaseSchedulerSolver()
+        now = datetime(2026, 7, 6, 10, 0)
+        threshold_floor = now + timedelta(minutes=15)
+        target_time = threshold_floor + timedelta(minutes=2)
+        task = self._make_run_order(now + timedelta(minutes=30), "room_1_2")
+        solver.tasks = [task]
+        solver.recog = MagicMock(w=1920, h=1080, gray=None)
+        solver.digit_reader = MagicMock()
+        solver.digit_reader.get_drone.return_value = 100
+        solver.tap = MagicMock()
+
+        with patch.object(base_schedule.config.conf, "drone_count_limit", 100):
+            solver.merge_order_time((0, 0), "room_1_2", target_time, threshold_floor)
+
+        solver.tap.assert_not_called()
+        self.assertEqual(task.time, now + timedelta(minutes=30))
 
 
 if __name__ == "__main__":

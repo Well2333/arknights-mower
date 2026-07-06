@@ -613,7 +613,9 @@ if (return_home_when_idle.value) {
                 </help-text>
               </n-checkbox>
             </n-form-item>
-            <n-form-item v-if="run_order_grandet_mode.enable && run_order_grandet_mode.merge_enable">
+            <n-form-item
+              v-if="run_order_grandet_mode.enable && run_order_grandet_mode.merge_enable"
+            >
               <template #label>
                 <span>合并跑单最大间隔</span>
                 <help-text>
