@@ -19,6 +19,7 @@ export const useConfigStore = defineStore('config', () => {
   const maa_startup_check = ref(false)
   const maa_expiring_medicine = ref(true)
   const maa_weekly_plan = ref([])
+  const maa_weekly_plan1 = ref([])
   const maa_weekly_plan_options = ref([])
   const maa_weekly_plan_active = ref('')
   const maa_rg_enable = ref(0)
@@ -269,6 +270,9 @@ export const useConfigStore = defineStore('config', () => {
     maa_long_task_type.value = response.data.maa_long_task_type
     maa_expiring_medicine.value = response.data.maa_expiring_medicine
     maa_weekly_plan.value = normalizeWeeklyPlan(response.data.maa_weekly_plan)
+    maa_weekly_plan1.value = Array.isArray(response.data.maa_weekly_plan1)
+      ? response.data.maa_weekly_plan1
+      : []
     maa_weekly_plan_active.value = response.data.maa_weekly_plan_active || ''
     mail_enable.value = response.data.mail_enable != 0
     account.value = response.data.account
@@ -376,6 +380,7 @@ export const useConfigStore = defineStore('config', () => {
       maa_rg_enable: maa_rg_enable.value ? 1 : 0,
       maa_long_task_type: maa_long_task_type.value,
       maa_expiring_medicine: maa_expiring_medicine.value,
+      maa_weekly_plan1: maa_weekly_plan1.value,
       mail_enable: mail_enable.value ? 1 : 0,
       package_type: package_type.value == 'official' ? 1 : 0,
       pass_code: pass_code.value,
@@ -515,6 +520,7 @@ export const useConfigStore = defineStore('config', () => {
     maa_long_task_type,
     maa_expiring_medicine,
     maa_weekly_plan,
+    maa_weekly_plan1,
     maa_weekly_plan_options,
     maa_weekly_plan_active,
     mail_enable,
