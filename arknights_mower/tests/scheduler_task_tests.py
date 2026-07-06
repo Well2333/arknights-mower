@@ -9,6 +9,7 @@ from arknights_mower.utils.scheduler_task import (
     TaskTypes,
     check_dorm_ordering,
     find_next_task,
+    find_run_order_merge_pair,
     scheduling,
     try_reorder,
 )
@@ -107,6 +108,76 @@ class TestScheduling(unittest.TestCase):
         # 其他任务会被移送至跑单任务以后
         self.assertEqual(tasks[2].plan["task"], "Task 4")
         self.assertEqual(res, None)
+
+    def _make_run_order(self, time_str, room, adjusted=False, run_order=True):
+        return SchedulerTask(
+            time=datetime.strptime(time_str, "%Y-%m-%d %H:%M"),
+            task_type=TaskTypes.RUN_ORDER if run_order else TaskTypes.SHIFT_ON,
+            meta_data=room,
+            adjusted=adjusted,
+        )
+
+    def test_find_run_order_merge_pair(self):
+        # 间隔20分钟的两个跑单任务应被识别为可合并
+        time_now = datetime.strptime("2023-09-19 10:00", "%Y-%m-%d %H:%M")
+        tasks = [
+            self._make_run_order("2023-09-19 10:10", "room_1_1"),
+            self._make_run_order("2023-09-19 10:30", "room_1_2"),
+        ]
+        pair = find_run_order_merge_pair(
+            tasks, run_order_delay=5, merge_margin=2, max_gap=30, time_now=time_now
+        )
+        self.assertIsNotNone(pair)
+        self.assertEqual(pair[0].meta_data, "room_1_1")
+        self.assertEqual(pair[1].meta_data, "room_1_2")
+        # 合并目标间隔（阈值+余量）不会再触发过于接近修正
+        tasks[1].time = tasks[0].time + timedelta(minutes=5 + 2)
+        res = scheduling(tasks, run_order_delay=5, time_now=time_now)
+        self.assertIsNone(res)
+
+    def test_find_run_order_merge_pair_skip(self):
+        time_now = datetime.strptime("2023-09-19 10:00", "%Y-%m-%d %H:%M")
+        # 已经足够接近，不合并
+        tasks = [
+            self._make_run_order("2023-09-19 10:10", "room_1_1"),
+            self._make_run_order("2023-09-19 10:18", "room_1_2"),
+        ]
+        self.assertIsNone(
+            find_run_order_merge_pair(
+                tasks, run_order_delay=5, merge_margin=2, max_gap=30, time_now=time_now
+            )
+        )
+        # 间隔超过 max_gap，不合并
+        tasks = [
+            self._make_run_order("2023-09-19 10:10", "room_1_1"),
+            self._make_run_order("2023-09-19 10:50", "room_1_2"),
+        ]
+        self.assertIsNone(
+            find_run_order_merge_pair(
+                tasks, run_order_delay=5, merge_margin=2, max_gap=30, time_now=time_now
+            )
+        )
+        # 维护期被调整过的任务不合并
+        tasks = [
+            self._make_run_order("2023-09-19 10:10", "room_1_1"),
+            self._make_run_order("2023-09-19 10:30", "room_1_2", adjusted=True),
+        ]
+        self.assertIsNone(
+            find_run_order_merge_pair(
+                tasks, run_order_delay=5, merge_margin=2, max_gap=30, time_now=time_now
+            )
+        )
+        # 已经过去的任务与非跑单任务不参与合并
+        tasks = [
+            self._make_run_order("2023-09-19 09:10", "room_1_1"),
+            self._make_run_order("2023-09-19 10:10", "room_1_2", run_order=False),
+            self._make_run_order("2023-09-19 10:30", "room_1_3"),
+        ]
+        self.assertIsNone(
+            find_run_order_merge_pair(
+                tasks, run_order_delay=5, merge_margin=2, max_gap=30, time_now=time_now
+            )
+        )
 
     def test_find_next(self):
         # 测试 方程有效

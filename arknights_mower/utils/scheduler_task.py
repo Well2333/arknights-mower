@@ -181,6 +181,43 @@ def scheduling(tasks, run_order_delay=5, execution_time=0.75, time_now=None):
         tasks.sort(key=lambda x: x.time)
 
 
+def find_run_order_merge_pair(
+    tasks, run_order_delay=5, merge_margin=2, max_gap=30, time_now=None
+):
+    """找到可合并的相邻跑单任务对
+
+    当后一个跑单任务与前一个间隔过远时，返回 (前一个任务, 后一个任务)，
+    供调用方用无人机加速后者，将其跑单时间拉近至前者之后
+    run_order_delay + merge_margin 分钟处，从而减少一次登录。
+
+    Args:
+        tasks: 任务列表
+        run_order_delay: 跑单任务过于接近的判定阈值（分钟），与 scheduling 保持一致
+        merge_margin: 合并后与阈值保持的安全余量（分钟），防止触发过于接近修正
+        max_gap: 仅当间隔小于该值（分钟）时才合并，避免为过远的订单消耗大量无人机
+        time_now: 当前时间
+    """
+    if time_now is None:
+        time_now = datetime.now()
+    run_orders = sorted(
+        (t for t in tasks if t.type.priority == 1 and t.time > time_now),
+        key=lambda t: t.time,
+    )
+    target_gap = timedelta(minutes=run_order_delay + merge_margin)
+    for prev, nxt in zip(run_orders, run_orders[1:]):
+        # 维护期附近被调整过的任务不再移动
+        if nxt.adjusted:
+            continue
+        gap = nxt.time - prev.time
+        # 已经足够接近，或间隔过大不值得消耗无人机
+        if gap <= target_gap + timedelta(minutes=merge_margin):
+            continue
+        if gap > timedelta(minutes=max_gap):
+            continue
+        return prev, nxt
+    return None
+
+
 def adjust_run_order_for_maintenance(tasks, run_order_delay=5):
     """
     将维护期附近的 RUN_ORDER 任务提前到维护前，避免维护期冲突。

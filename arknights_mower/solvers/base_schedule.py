@@ -68,6 +68,7 @@ from arknights_mower.utils.scheduler_task import (
     TaskTypes,
     check_dorm_ordering,
     find_next_task,
+    find_run_order_merge_pair,
     plan_metadata,
     scheduling,
     try_add_release_dorm,
@@ -1782,6 +1783,11 @@ class BaseSchedulerSolver(SceneGraphSolver, BaseMixin):
                     logger.info(f"第{adj_count}次循环结束")
                     if is_run is not None and not is_run:
                         return
+                if (
+                    config.conf.run_order_grandet_mode.enable
+                    and config.conf.run_order_grandet_mode.merge_enable
+                ):
+                    self.merge_run_order_tasks()
         fia_plan, fia_room = self.check_fia()
         if fia_room is not None and fia_plan is not None:
             if self.find_next_task(task_type=TaskTypes.FIAMMETTA) is None:
@@ -1936,6 +1942,43 @@ class BaseSchedulerSolver(SceneGraphSolver, BaseMixin):
 
         # return adjust_0_room , adjust_0_room_len
         return adjust_0_room
+
+    def merge_run_order_tasks(self):
+        """合并间隔过远的相邻跑单任务
+
+        用无人机加速后一个订单，将其跑单时间拉近至上一个跑单之后，
+        减少中间一次登录；拉近后仍保持在“过于接近”阈值之外。
+        """
+        # scheduling() 判定“过于接近”取其默认参数 5 分钟，与跑单前置延时取较大值兜底
+        conflict_threshold = max(5.0, config.conf.run_order_delay)
+        merge_margin = 2.0
+        merge_count = 0
+        while merge_count < 5:
+            pair = find_run_order_merge_pair(
+                self.tasks,
+                run_order_delay=conflict_threshold,
+                merge_margin=merge_margin,
+                max_gap=config.conf.run_order_grandet_mode.merge_max_gap,
+            )
+            if pair is None:
+                break
+            prev_task, next_task = pair
+            room = next_task.meta_data
+            threshold_floor = prev_task.time + timedelta(minutes=conflict_threshold)
+            target_time = threshold_floor + timedelta(minutes=merge_margin)
+            logger.info(
+                f"检测到跑单任务间隔过远，准备将 {room} 的跑单时间拉近至 {target_time.strftime('%H:%M:%S')}"
+            )
+            before = next_task.time
+            self.drone(
+                room, adjust_time=True, merge_target=(target_time, threshold_floor)
+            )
+            if next_task.time >= before:
+                # 无人机不足或订单无法继续加速时停止，防止死循环
+                break
+            merge_count += 1
+        if merge_count:
+            self.tasks.sort(key=lambda x: x.time)
 
     def plan_solver(self):
         # 准备数据
@@ -2721,6 +2764,83 @@ class BaseSchedulerSolver(SceneGraphSolver, BaseMixin):
                 break
         return None
 
+    def merge_order_time(self, accelerate, room, target_time, threshold_floor):
+        """通过无人机加速，将 room 的跑单时间拉近至 target_time
+
+        target_time: 期望的跑单时间
+        threshold_floor: 不可越过的下限，低于该值会触发“过于接近”的修正
+        """
+        if accelerate is None:
+            logger.warning(f"房间 {room} 未找到订单加速按钮，跳过合并跑单时间")
+            return
+        task = find_next_task(self.tasks, task_type=TaskTypes.RUN_ORDER, meta_data=room)
+        if task is None:
+            return
+        error_count = 0
+        # 单台无人机减少订单时间的保守估计，实际加速一次后按实测值修正
+        step_estimate = timedelta(minutes=5)
+        while task.time > target_time:
+            drone_count = self.digit_reader.get_drone(self.recog.gray)
+            logger.info(f"当前无人机数量为：{drone_count}")
+            if drone_count <= config.conf.drone_count_limit:
+                logger.info(
+                    f"无人机数量不高于使用阈值{config.conf.drone_count_limit}，停止合并跑单时间"
+                )
+                break
+            # 距离下限不足一台无人机的减少量时不再加速，防止过于接近
+            max_safe_presses = (task.time - threshold_floor) // step_estimate
+            if max_safe_presses < 1:
+                break
+            presses = int((task.time - target_time) / step_estimate) + 1
+            presses = max(
+                1,
+                min(
+                    presses,
+                    max_safe_presses,
+                    int(drone_count - config.conf.drone_count_limit),
+                ),
+            )
+            self.tap(accelerate)
+            if self.scene() in self.waiting_scene:
+                if not self.waiting_solver():
+                    return
+            for _ in range(presses):
+                self.tap(
+                    (self.recog.w * 1320 // 1920, self.recog.h * 502 // 1080),
+                    interval=0.1,
+                )
+            self.tap((self.recog.w * 3 // 4, self.recog.h * 4 // 5))
+            if self.scene() in self.waiting_scene:
+                if not self.waiting_solver():
+                    return
+            while self.find("bill_accelerate") is None:
+                if error_count > 5:
+                    raise Exception("未成功进入订单界面")
+                self.tap((self.recog.w // 20, self.recog.h * 19 // 20), interval=1)
+                error_count += 1
+            _time = self.double_read_time(
+                (
+                    (self.recog.w * 650 // 2496, self.recog.h * 660 // 1404),
+                    (self.recog.w * 815 // 2496, self.recog.h * 710 // 1404),
+                ),
+                use_digit_reader=True,
+            )
+            new_task_time = _time - timedelta(minutes=config.conf.run_order_delay)
+            reduced = task.time - new_task_time
+            if reduced <= timedelta():
+                logger.info(f"房间 {room} 订单时间未减少，停止合并跑单时间")
+                break
+            step_estimate = max(reduced / presses, timedelta(minutes=1))
+            task.time = new_task_time
+            logger.info(
+                f"房间 {room} 合并跑单：加速后接单时间为 {new_task_time.strftime('%H:%M:%S')}"
+            )
+            if task.time < threshold_floor:
+                logger.warning(
+                    f"房间 {room} 跑单时间已低于安全下限，交由跑单冲突修正处理"
+                )
+                break
+
     def drone(
         self,
         room: str,
@@ -2728,6 +2848,7 @@ class BaseSchedulerSolver(SceneGraphSolver, BaseMixin):
         not_return=False,
         adjust_time=False,
         skip_enter=False,
+        merge_target=None,
     ):
         logger.info("基建：无人机加速" if not adjust_time else "开始调整订单时间")
         all_in = 0
@@ -2803,6 +2924,8 @@ class BaseSchedulerSolver(SceneGraphSolver, BaseMixin):
                         break
                 accelerate = self.find("bill_accelerate")
             if adjust_time:
+                if merge_target is not None:
+                    return self.merge_order_time(accelerate, room, *merge_target)
                 return self.adjust_order_time(accelerate, room)
         if not_return:
             return

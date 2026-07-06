@@ -603,6 +603,28 @@ if (return_home_when_idle.value) {
                 跑单前返回主界面以保持登录状态
               </n-checkbox>
             </n-form-item>
+            <n-form-item v-if="run_order_grandet_mode.enable" :show-label="false">
+              <n-checkbox v-model:checked="run_order_grandet_mode.merge_enable">
+                合并相邻跑单任务
+                <help-text>
+                  <div>用无人机加速下一个订单，将其跑单时间拉近至上一个跑单之后，减少一次登录</div>
+                  <div>拉近后仍保持在“过于接近”阈值之外，不会触发跑单冲突修正</div>
+                  <div>消耗无人机数量受“无人机使用阈值”限制</div>
+                </help-text>
+              </n-checkbox>
+            </n-form-item>
+            <n-form-item v-if="run_order_grandet_mode.enable && run_order_grandet_mode.merge_enable">
+              <template #label>
+                <span>合并跑单最大间隔</span>
+                <help-text>
+                  <div>仅当相邻跑单间隔小于该值时进行合并</div>
+                  <div>间隔过大时合并会消耗大量无人机</div>
+                </help-text>
+              </template>
+              <n-input-number v-model:value="run_order_grandet_mode.merge_max_gap" :min="10">
+                <template #suffix>分钟</template>
+              </n-input-number>
+            </n-form-item>
             <n-form-item>
               <template #label>
                 <span>无人机使用房间</span>

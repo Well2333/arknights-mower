@@ -480,6 +480,10 @@ class RIICPart(ConfModel):
         "缓冲时间"
         back_to_index: bool = False
         "跑单前返回基建首页"
+        merge_enable: bool = False
+        "合并跑单任务：用无人机加速将下一个跑单时间拉近至上一个跑单之后"
+        merge_max_gap: float = 30
+        "仅当相邻跑单间隔小于该值（分钟）时进行合并"
 
     class WorkShopSetting(ConfModel):
         items: list[WorkShopItem] = []
