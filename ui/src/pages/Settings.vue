@@ -578,7 +578,7 @@ if (return_home_when_idle.value) {
               <template #label>
                 <span>跑单前置延时</span>
                 <help-text>
-                  <div>推荐范围4-10</div>
+                  <div>推荐范围3-10</div>
                   <div>可填小数</div>
                 </help-text>
               </template>

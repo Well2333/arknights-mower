@@ -12,7 +12,7 @@ from arknights_mower.utils.log import logger
 from arknights_mower.utils.news_checker import NewsChecker
 from arknights_mower.utils.operators import Operator
 
-RUN_ORDER_MIN_INTERVAL = 4
+RUN_ORDER_MIN_INTERVAL = 3
 RUN_ORDER_MERGE_MARGIN = 2
 
 

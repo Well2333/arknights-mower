@@ -418,7 +418,7 @@ class TestMergeRunOrder(unittest.TestCase):
             task.time = target_time
 
         with (
-            patch.object(base_schedule.config.conf, "run_order_delay", 4),
+            patch.object(base_schedule.config.conf, "run_order_delay", 3),
             patch.object(
                 base_schedule.config.conf.run_order_grandet_mode, "merge_max_gap", 30
             ),
@@ -426,9 +426,9 @@ class TestMergeRunOrder(unittest.TestCase):
         ):
             solver.merge_run_order_tasks()
 
-        # 最短间隔为 4 分钟，目标间隔为 4 + 2 分钟
+        # 最短间隔为 3 分钟，目标间隔为 3 + 2 分钟
         self.assertEqual(drone_calls, ["room_1_2"])
-        self.assertEqual(nxt.time, prev.time + timedelta(minutes=6))
+        self.assertEqual(nxt.time, prev.time + timedelta(minutes=5))
         # 任务列表被重新排序
         self.assertEqual(solver.tasks, [prev, nxt])
 
@@ -453,7 +453,7 @@ class TestMergeRunOrder(unittest.TestCase):
             task.time = target_time
 
         with (
-            patch.object(base_schedule.config.conf, "run_order_delay", 4),
+            patch.object(base_schedule.config.conf, "run_order_delay", 3),
             patch.object(
                 base_schedule.config.conf.run_order_grandet_mode, "merge_max_gap", 30
             ),
@@ -477,7 +477,7 @@ class TestMergeRunOrder(unittest.TestCase):
         solver.tasks = [prev, nxt]
 
         with (
-            patch.object(base_schedule.config.conf, "run_order_delay", 4),
+            patch.object(base_schedule.config.conf, "run_order_delay", 3),
             patch.object(
                 base_schedule.config.conf.run_order_grandet_mode, "merge_max_gap", 30
             ),
@@ -494,7 +494,7 @@ class TestMergeRunOrder(unittest.TestCase):
         solver = BaseSchedulerSolver()
         now = datetime(2026, 7, 6, 10, 0)
         prev_time = now + timedelta(minutes=10)
-        threshold_floor = prev_time + timedelta(minutes=4)
+        threshold_floor = prev_time + timedelta(minutes=3)
         target_time = threshold_floor + timedelta(minutes=2)
         task = self._make_run_order(now + timedelta(minutes=30), "room_1_2")
         solver.tasks = [task]
@@ -518,7 +518,7 @@ class TestMergeRunOrder(unittest.TestCase):
         solver.double_read_time = lambda *args, **kwargs: state["completion"]
 
         with (
-            patch.object(base_schedule.config.conf, "run_order_delay", 4),
+            patch.object(base_schedule.config.conf, "run_order_delay", 3),
             patch.object(base_schedule.config.conf, "drone_count_limit", 100),
         ):
             solver.merge_order_time((0, 0), "room_1_2", target_time, threshold_floor)

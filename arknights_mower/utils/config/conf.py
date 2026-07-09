@@ -503,7 +503,7 @@ class RIICPart(ConfModel):
     "宿舍黑名单"
     reload_room: str = ""
     "搓玉补货房间"
-    run_order_delay: float = 4
+    run_order_delay: float = 3
     "跑单前置延时"
     resting_threshold: float = 0.65
     "心情阈值"

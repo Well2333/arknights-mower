@@ -125,16 +125,16 @@ class TestScheduling(unittest.TestCase):
             self._make_run_order("2023-09-19 10:30", "room_1_2"),
         ]
         pair = find_run_order_merge_pair(
-            tasks, run_order_delay=4, merge_margin=2, max_gap=30, time_now=time_now
+            tasks, run_order_delay=3, merge_margin=2, max_gap=30, time_now=time_now
         )
         self.assertIsNotNone(pair)
         self.assertEqual(pair[0].meta_data, "room_1_1")
         self.assertEqual(pair[1].meta_data, "room_1_2")
-        self.assertEqual(pair[2], tasks[0].time + timedelta(minutes=4 + 2))
-        self.assertEqual(pair[3], tasks[0].time + timedelta(minutes=4))
+        self.assertEqual(pair[2], tasks[0].time + timedelta(minutes=3 + 2))
+        self.assertEqual(pair[3], tasks[0].time + timedelta(minutes=3))
         # 合并目标间隔（阈值+余量）不会再触发过于接近修正
-        tasks[1].time = tasks[0].time + timedelta(minutes=4 + 2)
-        res = scheduling(tasks, run_order_delay=4, time_now=time_now)
+        tasks[1].time = tasks[0].time + timedelta(minutes=3 + 2)
+        res = scheduling(tasks, run_order_delay=3, time_now=time_now)
         self.assertIsNone(res)
 
     def test_find_run_order_merge_pair_skip(self):
@@ -146,7 +146,7 @@ class TestScheduling(unittest.TestCase):
         ]
         self.assertIsNone(
             find_run_order_merge_pair(
-                tasks, run_order_delay=4, merge_margin=2, max_gap=30, time_now=time_now
+                tasks, run_order_delay=3, merge_margin=2, max_gap=30, time_now=time_now
             )
         )
         # 间隔超过 max_gap，不合并
@@ -156,7 +156,7 @@ class TestScheduling(unittest.TestCase):
         ]
         self.assertIsNone(
             find_run_order_merge_pair(
-                tasks, run_order_delay=4, merge_margin=2, max_gap=30, time_now=time_now
+                tasks, run_order_delay=3, merge_margin=2, max_gap=30, time_now=time_now
             )
         )
         # 维护期被调整过的任务不合并
@@ -166,7 +166,7 @@ class TestScheduling(unittest.TestCase):
         ]
         self.assertIsNone(
             find_run_order_merge_pair(
-                tasks, run_order_delay=4, merge_margin=2, max_gap=30, time_now=time_now
+                tasks, run_order_delay=3, merge_margin=2, max_gap=30, time_now=time_now
             )
         )
         # 已经过去的任务不参与合并；没有未来锚点时不移动跑单
@@ -176,7 +176,7 @@ class TestScheduling(unittest.TestCase):
         ]
         self.assertIsNone(
             find_run_order_merge_pair(
-                tasks, run_order_delay=4, merge_margin=2, max_gap=30, time_now=time_now
+                tasks, run_order_delay=3, merge_margin=2, max_gap=30, time_now=time_now
             )
         )
 
@@ -190,7 +190,7 @@ class TestScheduling(unittest.TestCase):
         ]
 
         anchor, run_order, target_time, threshold_floor = find_run_order_merge_pair(
-            tasks, run_order_delay=4, merge_margin=2, max_gap=30, time_now=time_now
+            tasks, run_order_delay=3, merge_margin=2, max_gap=30, time_now=time_now
         )
 
         self.assertEqual(anchor.meta_data, "shift_on")
