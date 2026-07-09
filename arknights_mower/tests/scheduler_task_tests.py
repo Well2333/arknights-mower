@@ -35,7 +35,7 @@ class TestScheduling(unittest.TestCase):
             task_plan={"task": "Task 3"},
         )
         task4 = SchedulerTask(
-            time=datetime.strptime("2023-09-19 10:03", "%Y-%m-%d %H:%M"),
+            time=datetime.strptime("2023-09-19 10:02", "%Y-%m-%d %H:%M"),
             task_plan={"task": "Task 4"},
             task_type=TaskTypes.RUN_ORDER,
         )
@@ -125,14 +125,16 @@ class TestScheduling(unittest.TestCase):
             self._make_run_order("2023-09-19 10:30", "room_1_2"),
         ]
         pair = find_run_order_merge_pair(
-            tasks, run_order_delay=5, merge_margin=2, max_gap=30, time_now=time_now
+            tasks, run_order_delay=4, merge_margin=2, max_gap=30, time_now=time_now
         )
         self.assertIsNotNone(pair)
         self.assertEqual(pair[0].meta_data, "room_1_1")
         self.assertEqual(pair[1].meta_data, "room_1_2")
+        self.assertEqual(pair[2], tasks[0].time + timedelta(minutes=4 + 2))
+        self.assertEqual(pair[3], tasks[0].time + timedelta(minutes=4))
         # 合并目标间隔（阈值+余量）不会再触发过于接近修正
-        tasks[1].time = tasks[0].time + timedelta(minutes=5 + 2)
-        res = scheduling(tasks, run_order_delay=5, time_now=time_now)
+        tasks[1].time = tasks[0].time + timedelta(minutes=4 + 2)
+        res = scheduling(tasks, run_order_delay=4, time_now=time_now)
         self.assertIsNone(res)
 
     def test_find_run_order_merge_pair_skip(self):
@@ -140,11 +142,11 @@ class TestScheduling(unittest.TestCase):
         # 已经足够接近，不合并
         tasks = [
             self._make_run_order("2023-09-19 10:10", "room_1_1"),
-            self._make_run_order("2023-09-19 10:18", "room_1_2"),
+            self._make_run_order("2023-09-19 10:17", "room_1_2"),
         ]
         self.assertIsNone(
             find_run_order_merge_pair(
-                tasks, run_order_delay=5, merge_margin=2, max_gap=30, time_now=time_now
+                tasks, run_order_delay=4, merge_margin=2, max_gap=30, time_now=time_now
             )
         )
         # 间隔超过 max_gap，不合并
@@ -154,7 +156,7 @@ class TestScheduling(unittest.TestCase):
         ]
         self.assertIsNone(
             find_run_order_merge_pair(
-                tasks, run_order_delay=5, merge_margin=2, max_gap=30, time_now=time_now
+                tasks, run_order_delay=4, merge_margin=2, max_gap=30, time_now=time_now
             )
         )
         # 维护期被调整过的任务不合并
@@ -164,19 +166,41 @@ class TestScheduling(unittest.TestCase):
         ]
         self.assertIsNone(
             find_run_order_merge_pair(
-                tasks, run_order_delay=5, merge_margin=2, max_gap=30, time_now=time_now
+                tasks, run_order_delay=4, merge_margin=2, max_gap=30, time_now=time_now
             )
         )
-        # 已经过去的任务与非跑单任务不参与合并
+        # 已经过去的任务不参与合并；没有未来锚点时不移动跑单
         tasks = [
             self._make_run_order("2023-09-19 09:10", "room_1_1"),
-            self._make_run_order("2023-09-19 10:10", "room_1_2", run_order=False),
             self._make_run_order("2023-09-19 10:30", "room_1_3"),
         ]
         self.assertIsNone(
             find_run_order_merge_pair(
-                tasks, run_order_delay=5, merge_margin=2, max_gap=30, time_now=time_now
+                tasks, run_order_delay=4, merge_margin=2, max_gap=30, time_now=time_now
             )
+        )
+
+    def test_find_run_order_merge_pair_uses_nearest_non_run_anchor(self):
+        # 跑单会优先贴近最近的普通任务，而不是只贴近上一个跑单
+        time_now = datetime.strptime("2023-09-19 10:00", "%Y-%m-%d %H:%M")
+        tasks = [
+            self._make_run_order("2023-09-19 10:10", "room_1_1"),
+            self._make_run_order("2023-09-19 10:20", "shift_on", run_order=False),
+            self._make_run_order("2023-09-19 10:30", "room_1_2"),
+        ]
+
+        anchor, run_order, target_time, threshold_floor = find_run_order_merge_pair(
+            tasks, run_order_delay=4, merge_margin=2, max_gap=30, time_now=time_now
+        )
+
+        self.assertEqual(anchor.meta_data, "shift_on")
+        self.assertEqual(run_order.meta_data, "room_1_2")
+        self.assertEqual(
+            threshold_floor,
+            datetime.strptime("2023-09-19 10:20", "%Y-%m-%d %H:%M"),
+        )
+        self.assertEqual(
+            target_time, datetime.strptime("2023-09-19 10:22", "%Y-%m-%d %H:%M")
         )
 
     def test_find_next(self):

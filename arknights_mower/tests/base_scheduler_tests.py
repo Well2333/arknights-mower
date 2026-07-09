@@ -418,7 +418,7 @@ class TestMergeRunOrder(unittest.TestCase):
             task.time = target_time
 
         with (
-            patch.object(base_schedule.config.conf, "run_order_delay", 3),
+            patch.object(base_schedule.config.conf, "run_order_delay", 4),
             patch.object(
                 base_schedule.config.conf.run_order_grandet_mode, "merge_max_gap", 30
             ),
@@ -426,11 +426,46 @@ class TestMergeRunOrder(unittest.TestCase):
         ):
             solver.merge_run_order_tasks()
 
-        # conflict_threshold = max(5, 3) = 5，目标间隔为 5 + 2 分钟
+        # 最短间隔为 4 分钟，目标间隔为 4 + 2 分钟
         self.assertEqual(drone_calls, ["room_1_2"])
-        self.assertEqual(nxt.time, prev.time + timedelta(minutes=7))
+        self.assertEqual(nxt.time, prev.time + timedelta(minutes=6))
         # 任务列表被重新排序
         self.assertEqual(solver.tasks, [prev, nxt])
+
+    @patch.object(BaseSchedulerSolver, "__init__", lambda x: None)
+    def test_merge_run_order_tasks_pulls_next_task_to_non_run_anchor(self):
+        solver = BaseSchedulerSolver()
+        now = datetime.now()
+        prev = self._make_run_order(now + timedelta(minutes=10), "room_1_1")
+        shift = SchedulerTask(
+            time=now + timedelta(minutes=20),
+            task_type=TaskTypes.SHIFT_ON,
+            meta_data="shift_on",
+        )
+        nxt = self._make_run_order(now + timedelta(minutes=30), "room_1_2")
+        solver.tasks = [nxt, prev, shift]
+
+        def fake_drone(room, adjust_time=False, merge_target=None):
+            target_time, _ = merge_target
+            task = find_next_task(
+                solver.tasks, task_type=TaskTypes.RUN_ORDER, meta_data=room
+            )
+            task.time = target_time
+
+        with (
+            patch.object(base_schedule.config.conf, "run_order_delay", 4),
+            patch.object(
+                base_schedule.config.conf.run_order_grandet_mode, "merge_max_gap", 30
+            ),
+            patch.object(
+                BaseSchedulerSolver, "drone", side_effect=fake_drone
+            ) as mock_drone,
+        ):
+            solver.merge_run_order_tasks()
+
+        mock_drone.assert_called_once()
+        self.assertEqual(nxt.time, shift.time + timedelta(minutes=2))
+        self.assertEqual(solver.tasks, [prev, shift, nxt])
 
     @patch.object(BaseSchedulerSolver, "__init__", lambda x: None)
     def test_merge_run_order_tasks_stops_without_progress(self):
@@ -442,7 +477,7 @@ class TestMergeRunOrder(unittest.TestCase):
         solver.tasks = [prev, nxt]
 
         with (
-            patch.object(base_schedule.config.conf, "run_order_delay", 3),
+            patch.object(base_schedule.config.conf, "run_order_delay", 4),
             patch.object(
                 base_schedule.config.conf.run_order_grandet_mode, "merge_max_gap", 30
             ),
@@ -459,7 +494,7 @@ class TestMergeRunOrder(unittest.TestCase):
         solver = BaseSchedulerSolver()
         now = datetime(2026, 7, 6, 10, 0)
         prev_time = now + timedelta(minutes=10)
-        threshold_floor = prev_time + timedelta(minutes=5)
+        threshold_floor = prev_time + timedelta(minutes=4)
         target_time = threshold_floor + timedelta(minutes=2)
         task = self._make_run_order(now + timedelta(minutes=30), "room_1_2")
         solver.tasks = [task]
@@ -483,7 +518,7 @@ class TestMergeRunOrder(unittest.TestCase):
         solver.double_read_time = lambda *args, **kwargs: state["completion"]
 
         with (
-            patch.object(base_schedule.config.conf, "run_order_delay", 3),
+            patch.object(base_schedule.config.conf, "run_order_delay", 4),
             patch.object(base_schedule.config.conf, "drone_count_limit", 100),
         ):
             solver.merge_order_time((0, 0), "room_1_2", target_time, threshold_floor)

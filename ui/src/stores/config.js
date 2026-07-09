@@ -32,7 +32,7 @@ export const useConfigStore = defineStore('config', () => {
   const custom_smtp_server = ref({})
   const package_type = ref('official')
   const reload_room = ref('')
-  const run_order_delay = ref(10)
+  const run_order_delay = ref(4)
   const dorm_order = ref([])
   const start_automatically = ref(false)
   const maa_mall_buy = ref('')

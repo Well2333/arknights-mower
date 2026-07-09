@@ -481,9 +481,9 @@ class RIICPart(ConfModel):
         back_to_index: bool = False
         "跑单前返回基建首页"
         merge_enable: bool = False
-        "合并跑单任务：用无人机加速将下一个跑单时间拉近至上一个跑单之后"
+        "贴近跑单任务：用无人机加速将跑单时间拉近至上一个任务之后"
         merge_max_gap: float = 30
-        "仅当相邻跑单间隔小于该值（分钟）时进行合并"
+        "仅当预计提前量小于该值（分钟）时进行贴近"
 
     class WorkShopSetting(ConfModel):
         items: list[WorkShopItem] = []
@@ -503,7 +503,7 @@ class RIICPart(ConfModel):
     "宿舍黑名单"
     reload_room: str = ""
     "搓玉补货房间"
-    run_order_delay: float = 3
+    run_order_delay: float = 4
     "跑单前置延时"
     resting_threshold: float = 0.65
     "心情阈值"

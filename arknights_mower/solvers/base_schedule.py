@@ -1944,13 +1944,12 @@ class BaseSchedulerSolver(SceneGraphSolver, BaseMixin):
         return adjust_0_room
 
     def merge_run_order_tasks(self):
-        """合并间隔过远的相邻跑单任务
+        """将间隔过远的跑单任务贴近前一个任务
 
-        用无人机加速后一个订单，将其跑单时间拉近至上一个跑单之后，
+        用无人机加速订单，将其跑单时间拉近至上一个任务之后，
         减少中间一次登录；拉近后仍保持在“过于接近”阈值之外。
         """
-        # scheduling() 判定“过于接近”取其默认参数 5 分钟，与跑单前置延时取较大值兜底
-        conflict_threshold = max(5.0, config.conf.run_order_delay)
+        conflict_threshold = config.conf.run_order_delay
         merge_margin = 2.0
         merge_count = 0
         while merge_count < 5:
@@ -1962,12 +1961,12 @@ class BaseSchedulerSolver(SceneGraphSolver, BaseMixin):
             )
             if pair is None:
                 break
-            prev_task, next_task = pair
+            anchor_task, next_task, target_time, threshold_floor = pair
             room = next_task.meta_data
-            threshold_floor = prev_task.time + timedelta(minutes=conflict_threshold)
-            target_time = threshold_floor + timedelta(minutes=merge_margin)
             logger.info(
-                f"检测到跑单任务间隔过远，准备将 {room} 的跑单时间拉近至 {target_time.strftime('%H:%M:%S')}"
+                f"检测到跑单任务间隔过远，准备将 {room} 的跑单时间"
+                f"拉近至 {target_time.strftime('%H:%M:%S')}，"
+                f"贴近 {anchor_task.type.display_value} 任务"
             )
             before = next_task.time
             self.drone(

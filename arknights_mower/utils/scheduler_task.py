@@ -12,6 +12,9 @@ from arknights_mower.utils.log import logger
 from arknights_mower.utils.news_checker import NewsChecker
 from arknights_mower.utils.operators import Operator
 
+RUN_ORDER_MIN_INTERVAL = 4
+RUN_ORDER_MERGE_MARGIN = 2
+
 
 class TaskTypes(Enum):
     RUN_ORDER = ("run_order", "跑单", 1)
@@ -88,7 +91,9 @@ def find_next_task(
         )
 
 
-def scheduling(tasks, run_order_delay=5, execution_time=0.75, time_now=None):
+def scheduling(
+    tasks, run_order_delay=RUN_ORDER_MIN_INTERVAL, execution_time=0.75, time_now=None
+):
     # execution_time per room
     if time_now is None:
         time_now = datetime.now()
@@ -96,7 +101,7 @@ def scheduling(tasks, run_order_delay=5, execution_time=0.75, time_now=None):
         adjust_run_order_for_maintenance(tasks, run_order_delay)
         tasks.sort(key=lambda x: x.time)
 
-        # 任务间隔最小时间（5分钟）
+        # 跑单任务之间的最短安全间隔
         min_time_interval = timedelta(minutes=run_order_delay)
 
         # 初始化变量以跟踪上一个优先级0任务和计划执行时间总和
@@ -182,19 +187,23 @@ def scheduling(tasks, run_order_delay=5, execution_time=0.75, time_now=None):
 
 
 def find_run_order_merge_pair(
-    tasks, run_order_delay=5, merge_margin=2, max_gap=30, time_now=None
+    tasks,
+    run_order_delay=RUN_ORDER_MIN_INTERVAL,
+    merge_margin=RUN_ORDER_MERGE_MARGIN,
+    max_gap=30,
+    time_now=None,
 ):
-    """找到可合并的相邻跑单任务对
+    """找到可合并的跑单贴近目标
 
-    当后一个跑单任务与前一个间隔过远时，返回 (前一个任务, 后一个任务)，
-    供调用方用无人机加速后者，将其跑单时间拉近至前者之后
-    run_order_delay + merge_margin 分钟处，从而减少一次登录。
+    当跑单任务距离上一个任务过远时，返回
+    (贴近锚点任务, 跑单任务, 目标时间, 安全下限)，供调用方用无人机
+    加速跑单，将其拉近到锚点任务之后，从而把任务聚在一起、留出更长空档。
 
     Args:
         tasks: 任务列表
-        run_order_delay: 跑单任务过于接近的判定阈值（分钟），与 scheduling 保持一致
+        run_order_delay: 两个跑单任务之间的最短安全间隔（分钟），与 scheduling 保持一致
         merge_margin: 合并后与阈值保持的安全余量（分钟），防止触发过于接近修正
-        max_gap: 仅当间隔小于该值（分钟）时才合并，避免为过远的订单消耗大量无人机
+        max_gap: 仅当预计提前量小于该值（分钟）时才合并，避免为过远的订单消耗大量无人机
         time_now: 当前时间
     """
     if time_now is None:
@@ -203,22 +212,46 @@ def find_run_order_merge_pair(
         (t for t in tasks if t.type.priority == 1 and t.time > time_now),
         key=lambda t: t.time,
     )
-    target_gap = timedelta(minutes=run_order_delay + merge_margin)
-    for prev, nxt in zip(run_orders, run_orders[1:]):
+    future_tasks = sorted(
+        (t for t in tasks if t.time > time_now),
+        key=lambda t: t.time,
+    )
+    min_run_order_interval = timedelta(minutes=run_order_delay)
+    margin = timedelta(minutes=merge_margin)
+    max_acceleration = timedelta(minutes=max_gap)
+    for nxt in run_orders:
         # 维护期附近被调整过的任务不再移动
         if nxt.adjusted:
             continue
-        gap = nxt.time - prev.time
-        # 已经足够接近，或间隔过大不值得消耗无人机
-        if gap <= target_gap + timedelta(minutes=merge_margin):
+        previous_tasks = [
+            t for t in future_tasks if t is not nxt and t.time < nxt.time
+        ]
+        if not previous_tasks:
             continue
-        if gap > timedelta(minutes=max_gap):
+        anchor = previous_tasks[-1]
+        previous_run_orders = [
+            t for t in run_orders if t is not nxt and t.time < nxt.time
+        ]
+        threshold_floor = anchor.time
+        if previous_run_orders:
+            threshold_floor = max(
+                threshold_floor,
+                previous_run_orders[-1].time + min_run_order_interval,
+            )
+        target_time = threshold_floor + margin
+        acceleration = nxt.time - target_time
+        # 已经足够贴近，或提前量过大不值得消耗无人机
+        if acceleration <= margin:
             continue
-        return prev, nxt
+        if acceleration > max_acceleration:
+            continue
+        return anchor, nxt, target_time, threshold_floor
     return None
 
 
-def adjust_run_order_for_maintenance(tasks, run_order_delay=5):
+def adjust_run_order_for_maintenance(
+    tasks, run_order_delay=RUN_ORDER_MIN_INTERVAL
+):
     """
     将维护期附近的 RUN_ORDER 任务提前到维护前，避免维护期冲突。
     :param tasks: 任务列表
