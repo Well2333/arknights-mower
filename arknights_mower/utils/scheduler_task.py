@@ -100,6 +100,8 @@ def scheduling(
     if len(tasks) > 0:
         adjust_run_order_for_maintenance(tasks, run_order_delay)
         tasks.sort(key=lambda x: x.time)
+        merge_empty_tasks(tasks, config.conf.merge_interval, time_now)
+        tasks.sort(key=lambda x: x.time)
 
         # 跑单任务之间的最短安全间隔
         min_time_interval = timedelta(minutes=run_order_delay)
@@ -843,6 +845,43 @@ def merge_release_dorm(tasks, merge_interval):
                 tasks[-idx],
             )
             logger.info(f"自动合并{merge_interval}分钟以内任务")
+
+
+def merge_empty_tasks(tasks, merge_interval, time_now=None):
+    """将附近的纯空任务贴到真实任务后执行，减少额外唤醒。
+
+    空任务经常用于触发检查，因此这里只移动无 plan、无 meta 的未来空任务，
+    保留任务本身，不删除，也不改变任何排班任务的时间。
+    """
+    if time_now is None:
+        time_now = datetime.now()
+    if merge_interval <= 0:
+        return
+    window = timedelta(minutes=merge_interval)
+    min_future = time_now + timedelta(minutes=1)
+    for task in tasks:
+        if (
+            task.type != TaskTypes.NOT_SPECIFIC
+            or task.plan
+            or task.meta_data
+            or task.time <= min_future
+        ):
+            continue
+        anchors = [
+            anchor
+            for anchor in tasks
+            if anchor is not task
+            and anchor.type != TaskTypes.NOT_SPECIFIC
+            and anchor.time > time_now
+            and abs(anchor.time - task.time) <= window
+        ]
+        if not anchors:
+            continue
+        anchor = min(anchors, key=lambda item: abs(item.time - task.time))
+        target_time = anchor.time + timedelta(seconds=1)
+        if task.time != target_time:
+            task.time = target_time
+            logger.info(f"自动将空任务合并到{anchor.type.display_value}任务后")
 
 
 class SchedulerTask:

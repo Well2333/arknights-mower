@@ -10,6 +10,7 @@ from arknights_mower.utils.scheduler_task import (
     check_dorm_ordering,
     find_next_task,
     find_run_order_merge_pair,
+    merge_empty_tasks,
     scheduling,
     try_reorder,
 )
@@ -201,6 +202,48 @@ class TestScheduling(unittest.TestCase):
         )
         self.assertEqual(
             target_time, datetime.strptime("2023-09-19 10:22", "%Y-%m-%d %H:%M")
+        )
+
+    def test_merge_empty_tasks_moves_plain_empty_task_after_near_anchor(self):
+        time_now = datetime.strptime("2023-09-19 10:00", "%Y-%m-%d %H:%M")
+        anchor = SchedulerTask(
+            time=datetime.strptime("2023-09-19 10:10", "%Y-%m-%d %H:%M"),
+            task_plan={"room": ["Current"]},
+            task_type=TaskTypes.SHIFT_ON,
+        )
+        empty = SchedulerTask(
+            time=datetime.strptime("2023-09-19 10:18", "%Y-%m-%d %H:%M"),
+            task_plan={},
+            task_type=TaskTypes.NOT_SPECIFIC,
+        )
+        tasks = [empty, anchor]
+
+        merge_empty_tasks(tasks, merge_interval=10, time_now=time_now)
+
+        self.assertEqual(empty.time, anchor.time + timedelta(seconds=1))
+        self.assertEqual(
+            anchor.time, datetime.strptime("2023-09-19 10:10", "%Y-%m-%d %H:%M")
+        )
+
+    def test_merge_empty_tasks_keeps_tagged_empty_task(self):
+        time_now = datetime.strptime("2023-09-19 10:00", "%Y-%m-%d %H:%M")
+        anchor = SchedulerTask(
+            time=datetime.strptime("2023-09-19 10:10", "%Y-%m-%d %H:%M"),
+            task_plan={"room": ["Current"]},
+            task_type=TaskTypes.SHIFT_ON,
+        )
+        empty = SchedulerTask(
+            time=datetime.strptime("2023-09-19 10:18", "%Y-%m-%d %H:%M"),
+            task_plan={},
+            task_type=TaskTypes.NOT_SPECIFIC,
+            meta_data="followup",
+        )
+        tasks = [empty, anchor]
+
+        merge_empty_tasks(tasks, merge_interval=10, time_now=time_now)
+
+        self.assertEqual(
+            empty.time, datetime.strptime("2023-09-19 10:18", "%Y-%m-%d %H:%M")
         )
 
     def test_find_next(self):
