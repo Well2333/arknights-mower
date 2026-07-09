@@ -621,9 +621,10 @@ if (return_home_when_idle.value) {
                 <help-text>
                   <div>仅当预计提前量小于该值时进行合并</div>
                   <div>提前量过大时会消耗大量无人机</div>
+                  <div>可填小数</div>
                 </help-text>
               </template>
-              <n-input-number v-model:value="run_order_grandet_mode.merge_max_gap" :min="10">
+              <n-input-number v-model:value="run_order_grandet_mode.merge_max_gap" :min="0">
                 <template #suffix>分钟</template>
               </n-input-number>
             </n-form-item>
