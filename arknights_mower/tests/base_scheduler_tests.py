@@ -315,6 +315,31 @@ class TestBaseScheduler(unittest.TestCase):
         self.assertEqual([item["agent"] for item in result], ["", ""])
 
     @patch.object(BaseSchedulerSolver, "__init__", lambda x: None)
+    def test_immediate_run_order_forces_drone_after_arrange(self):
+        solver = BaseSchedulerSolver()
+        solver.task = SchedulerTask(
+            task_type=TaskTypes.RUN_ORDER,
+            immediate=True,
+            meta_data="room_1_1",
+        )
+        solver.tasks = []
+        solver.find = MagicMock(return_value=None)
+        arranged = {"room_1_1": ["Current"]}
+
+        with (
+            patch.object(
+                BaseSchedulerSolver,
+                "agent_arrange_room",
+                return_value=arranged,
+            ),
+            patch.object(BaseSchedulerSolver, "drone") as mock_drone,
+            patch.object(base_schedule.config.conf, "run_order_buffer_time", 1),
+        ):
+            solver.agent_arrange({"room_1_1": ["Current"]})
+
+        mock_drone.assert_called_once_with("room_1_1", not_customize=True)
+
+    @patch.object(BaseSchedulerSolver, "__init__", lambda x: None)
     def test_infra_main_requests_restart_after_mood_read(self):
         solver = BaseSchedulerSolver()
         solver.task = None
@@ -400,7 +425,7 @@ class TestMergeRunOrder(unittest.TestCase):
 
     @patch.object(BaseSchedulerSolver, "__init__", lambda x: None)
     def test_merge_run_order_tasks_pulls_next_task_closer(self):
-        # 间隔20分钟的相邻跑单任务被拉近至阈值+余量处
+        # 间隔20分钟的相邻跑单任务被拉近至配置的最终目标间隔处
         solver = BaseSchedulerSolver()
         # find_run_order_merge_pair 只处理未来任务，需以当前时间为基准
         now = datetime.now()
@@ -420,15 +445,15 @@ class TestMergeRunOrder(unittest.TestCase):
         with (
             patch.object(base_schedule.config.conf, "run_order_delay", 3),
             patch.object(
-                base_schedule.config.conf.run_order_grandet_mode, "merge_max_gap", 30
+                base_schedule.config.conf.run_order_grandet_mode, "merge_interval", 8
             ),
             patch.object(BaseSchedulerSolver, "drone", side_effect=fake_drone),
         ):
             solver.merge_run_order_tasks()
 
-        # 最短间隔为 3 分钟，目标间隔为 3 + 2 分钟
+        # 合并后目标间隔为 8 分钟
         self.assertEqual(drone_calls, ["room_1_2"])
-        self.assertEqual(nxt.time, prev.time + timedelta(minutes=5))
+        self.assertEqual(nxt.time, prev.time + timedelta(minutes=8))
         # 任务列表被重新排序
         self.assertEqual(solver.tasks, [prev, nxt])
 
@@ -455,7 +480,7 @@ class TestMergeRunOrder(unittest.TestCase):
         with (
             patch.object(base_schedule.config.conf, "run_order_delay", 3),
             patch.object(
-                base_schedule.config.conf.run_order_grandet_mode, "merge_max_gap", 30
+                base_schedule.config.conf.run_order_grandet_mode, "merge_interval", 8
             ),
             patch.object(
                 BaseSchedulerSolver, "drone", side_effect=fake_drone
@@ -464,7 +489,7 @@ class TestMergeRunOrder(unittest.TestCase):
             solver.merge_run_order_tasks()
 
         mock_drone.assert_called_once()
-        self.assertEqual(nxt.time, shift.time + timedelta(minutes=2))
+        self.assertEqual(nxt.time, shift.time + timedelta(minutes=8))
         self.assertEqual(solver.tasks, [prev, shift, nxt])
 
     @patch.object(BaseSchedulerSolver, "__init__", lambda x: None)
@@ -479,7 +504,7 @@ class TestMergeRunOrder(unittest.TestCase):
         with (
             patch.object(base_schedule.config.conf, "run_order_delay", 3),
             patch.object(
-                base_schedule.config.conf.run_order_grandet_mode, "merge_max_gap", 30
+                base_schedule.config.conf.run_order_grandet_mode, "merge_interval", 8
             ),
             patch.object(BaseSchedulerSolver, "drone") as mock_drone,
         ):
@@ -495,7 +520,7 @@ class TestMergeRunOrder(unittest.TestCase):
         now = datetime(2026, 7, 6, 10, 0)
         prev_time = now + timedelta(minutes=10)
         threshold_floor = prev_time + timedelta(minutes=3)
-        target_time = threshold_floor + timedelta(minutes=2)
+        target_time = prev_time + timedelta(minutes=8)
         task = self._make_run_order(now + timedelta(minutes=30), "room_1_2")
         solver.tasks = [task]
         solver.recog = MagicMock(w=1920, h=1080, gray=None)

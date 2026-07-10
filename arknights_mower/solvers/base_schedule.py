@@ -1950,14 +1950,12 @@ class BaseSchedulerSolver(SceneGraphSolver, BaseMixin):
         减少中间一次登录；拉近后仍保持在“过于接近”阈值之外。
         """
         conflict_threshold = config.conf.run_order_delay
-        merge_margin = 2.0
         merge_count = 0
         while merge_count < 5:
             pair = find_run_order_merge_pair(
                 self.tasks,
                 run_order_delay=conflict_threshold,
-                merge_margin=merge_margin,
-                max_gap=config.conf.run_order_grandet_mode.merge_max_gap,
+                merge_interval=config.conf.run_order_grandet_mode.merge_interval,
             )
             if pair is None:
                 break
@@ -3986,9 +3984,14 @@ class BaseSchedulerSolver(SceneGraphSolver, BaseMixin):
         for room in rooms:
             new_plan = self.agent_arrange_room(new_plan, room, plan, get_time=get_time)
         if len(new_plan) == 1 and room != "train":
-            if config.conf.run_order_buffer_time <= 0 or self.task.adjusted:
+            force_drone = self.task.adjusted or getattr(
+                self.task, "immediate", False
+            )
+            if config.conf.run_order_buffer_time <= 0 or force_drone:
                 if self.task.adjusted:
                     logger.info("检测到跑单已调整，强制使用无人机跑单")
+                elif getattr(self.task, "immediate", False):
+                    logger.info("检测到立即跑单，强制使用无人机跑单")
                 logger.info("开始插拔")
                 self.drone(room, not_customize=True)
             else:
@@ -5036,10 +5039,13 @@ class BaseSchedulerSolver(SceneGraphSolver, BaseMixin):
         `sleeping` 永远和实际行为一致；以后新增休息路径也不可能再漏设标志。
         用 try/finally 保证即使被 MowerExit（点停止）打断也能复位。
         """
+        config.wake_mower.clear()
         self.sleeping = True
         try:
-            self.sleep(remaining_time)
+            csleep(remaining_time, wake_event=config.wake_mower)
+            self.recog.update()
         finally:
+            config.wake_mower.clear()
             self.sleeping = False
 
     def rest_until_next_task(self):

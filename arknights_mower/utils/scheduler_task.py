@@ -13,7 +13,8 @@ from arknights_mower.utils.news_checker import NewsChecker
 from arknights_mower.utils.operators import Operator
 
 RUN_ORDER_MIN_INTERVAL = 3
-RUN_ORDER_MERGE_MARGIN = 2
+RUN_ORDER_MERGE_INTERVAL = 8
+RUN_ORDER_MAX_ACCELERATION = 30
 
 
 class TaskTypes(Enum):
@@ -189,8 +190,7 @@ def scheduling(
 def find_run_order_merge_pair(
     tasks,
     run_order_delay=RUN_ORDER_MIN_INTERVAL,
-    merge_margin=RUN_ORDER_MERGE_MARGIN,
-    max_gap=30,
+    merge_interval=RUN_ORDER_MERGE_INTERVAL,
     time_now=None,
 ):
     """找到可合并的跑单贴近目标
@@ -202,8 +202,7 @@ def find_run_order_merge_pair(
     Args:
         tasks: 任务列表
         run_order_delay: 两个跑单任务之间的最短安全间隔（分钟），与 scheduling 保持一致
-        merge_margin: 合并后与阈值保持的安全余量（分钟），防止触发过于接近修正
-        max_gap: 仅当预计提前量小于该值（分钟）时才合并，避免为过远的订单消耗大量无人机
+        merge_interval: 合并后锚点任务与跑单任务之间的目标间隔（分钟），不得低于5分钟
         time_now: 当前时间
     """
     if time_now is None:
@@ -217,8 +216,8 @@ def find_run_order_merge_pair(
         key=lambda t: t.time,
     )
     min_run_order_interval = timedelta(minutes=run_order_delay)
-    margin = timedelta(minutes=merge_margin)
-    max_acceleration = timedelta(minutes=max_gap)
+    target_interval = timedelta(minutes=max(merge_interval, 5))
+    max_acceleration = timedelta(minutes=RUN_ORDER_MAX_ACCELERATION)
     for nxt in run_orders:
         # 维护期附近被调整过的任务不再移动
         if nxt.adjusted:
@@ -238,15 +237,67 @@ def find_run_order_merge_pair(
                 threshold_floor,
                 previous_run_orders[-1].time + min_run_order_interval,
             )
-        target_time = threshold_floor + margin
+        # 输入值就是锚点后的最终目标间隔；安全下限只负责防止跑单冲突。
+        target_time = max(anchor.time + target_interval, threshold_floor)
         acceleration = nxt.time - target_time
-        # 已经足够贴近，或提前量过大不值得消耗无人机
-        if acceleration <= margin:
+        # 已经达到目标间隔，不需要消耗无人机
+        if acceleration <= timedelta():
             continue
+        # 固定保护上限，避免为特别遥远的订单一次性消耗大量无人机
         if acceleration > max_acceleration:
+            logger.info(
+                f"跳过{nxt.meta_data}贴近：需要提前"
+                f"{acceleration.total_seconds() / 60:.2f}分钟，"
+                f"超过固定保护上限{RUN_ORDER_MAX_ACCELERATION}分钟"
+            )
             continue
         return anchor, nxt, target_time, threshold_floor
     return None
+
+
+def find_immediate_run_order(tasks, time_now=None, exclude_task=None):
+    """返回任务队列中时间最近的未来跑单任务。"""
+    if time_now is None:
+        time_now = datetime.now()
+    run_orders = sorted(
+        (
+            task
+            for task in tasks
+            if task is not exclude_task
+            and task.type == TaskTypes.RUN_ORDER
+            and task.time >= time_now
+        ),
+        key=lambda task: task.time,
+    )
+    return run_orders[0] if run_orders else None
+
+
+def find_task_batch_end(tasks, start_task, batch_interval=RUN_ORDER_MIN_INTERVAL):
+    """返回从 start_task 所在位置开始的连续任务批次结束时间。
+
+    相邻任务的安排时间差严格小于 batch_interval 时，视为同一批次。
+    """
+    ordered = sorted(tasks, key=lambda task: task.time)
+    if not any(task is start_task for task in ordered):
+        ordered.append(start_task)
+        ordered.sort(key=lambda task: task.time)
+    start_index = next(
+        index for index, task in enumerate(ordered) if task is start_task
+    )
+    while (
+        start_index > 0
+        and ordered[start_index].time - ordered[start_index - 1].time
+        < timedelta(minutes=batch_interval)
+    ):
+        start_index -= 1
+    end_index = start_index
+    while (
+        end_index + 1 < len(ordered)
+        and ordered[end_index + 1].time - ordered[end_index].time
+        < timedelta(minutes=batch_interval)
+    ):
+        end_index += 1
+    return ordered[end_index].time
 
 
 def adjust_run_order_for_maintenance(
@@ -852,7 +903,13 @@ class SchedulerTask:
     meta_data = ""
 
     def __init__(
-        self, time=None, task_plan={}, task_type="", meta_data="", adjusted=False
+        self,
+        time=None,
+        task_plan={},
+        task_type="",
+        meta_data="",
+        adjusted=False,
+        immediate=False,
     ):
         if time is None:
             self.time = datetime.now()
@@ -862,6 +919,7 @@ class SchedulerTask:
         self.type = set_type_enum(task_type)
         self.meta_data = meta_data
         self.adjusted = adjusted
+        self.immediate = immediate
 
     def format(self, time_offset=0):
         res = copy.deepcopy(self)

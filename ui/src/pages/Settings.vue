@@ -576,7 +576,7 @@ if (return_home_when_idle.value) {
             </n-form-item>
             <n-form-item>
               <template #label>
-                <span>跑单前置延时</span>
+                <span class="custom-rainbow">跑单前置延时</span>
                 <help-text>
                   <div>推荐范围3-10</div>
                   <div>可填小数</div>
@@ -605,7 +605,7 @@ if (return_home_when_idle.value) {
             </n-form-item>
             <n-form-item v-if="run_order_grandet_mode.enable" :show-label="false">
               <n-checkbox v-model:checked="run_order_grandet_mode.merge_enable">
-                贴近跑单任务
+                <span class="custom-rainbow">贴近跑单任务</span>
                 <help-text>
                   <div>用无人机加速下一个订单，将其跑单时间拉近至上一个任务之后，减少一次登录</div>
                   <div>拉近后仍保持在“过于接近”阈值之外，不会触发跑单冲突修正</div>
@@ -617,14 +617,19 @@ if (return_home_when_idle.value) {
               v-if="run_order_grandet_mode.enable && run_order_grandet_mode.merge_enable"
             >
               <template #label>
-                <span>贴近跑单最大提前量</span>
+                <span class="custom-rainbow">贴近后跑单间隔</span>
                 <help-text>
-                  <div>仅当预计提前量小于该值时进行合并</div>
-                  <div>提前量过大时会消耗大量无人机</div>
-                  <div>可填小数</div>
+                  <div>表示贴近后两个任务之间希望保留的目标间隔</div>
+                  <div>例如填写8分钟，表示合并后间隔约为8分钟</div>
+                  <div>不能低于5分钟，用于避开跑单冲突并保留执行缓冲</div>
+                  <div>无人机不足或订单过远时可能无法完成贴近</div>
                 </help-text>
               </template>
-              <n-input-number v-model:value="run_order_grandet_mode.merge_max_gap" :min="0">
+              <n-input-number
+                v-model:value="run_order_grandet_mode.merge_interval"
+                :min="5"
+                :step="0.5"
+              >
                 <template #suffix>分钟</template>
               </n-input-number>
             </n-form-item>
@@ -1009,6 +1014,22 @@ h4 {
 </style>
 
 <style>
+.custom-rainbow {
+  background: linear-gradient(
+    90deg,
+    #ff4d4d 0%,
+    #ff9f43 20%,
+    #feca57 35%,
+    #1dd1a1 55%,
+    #54a0ff 75%,
+    #a55eea 100%
+  );
+  background-clip: text;
+  -webkit-background-clip: text;
+  color: transparent;
+  font-weight: 600;
+}
+
 /*小于1400的内容！*/
 @media (max-width: 1399px) {
   .grid-two {

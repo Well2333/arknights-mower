@@ -8,8 +8,10 @@ from arknights_mower.utils.scheduler_task import (
     SchedulerTask,
     TaskTypes,
     check_dorm_ordering,
+    find_immediate_run_order,
     find_next_task,
     find_run_order_merge_pair,
+    find_task_batch_end,
     scheduling,
     try_reorder,
 )
@@ -117,6 +119,58 @@ class TestScheduling(unittest.TestCase):
             adjusted=adjusted,
         )
 
+    def test_find_immediate_run_order_selects_nearest_and_checks_interval(self):
+        time_now = datetime.strptime("2023-09-19 10:00", "%Y-%m-%d %H:%M")
+        nearest = SchedulerTask(
+            time=datetime.strptime("2023-09-19 10:10", "%Y-%m-%d %H:%M"),
+            task_type=TaskTypes.RUN_ORDER,
+            meta_data="room_1_1",
+        )
+        later = SchedulerTask(
+            time=datetime.strptime("2023-09-19 10:20", "%Y-%m-%d %H:%M"),
+            task_type=TaskTypes.RUN_ORDER,
+            meta_data="room_1_2",
+        )
+
+        target = find_immediate_run_order([later, nearest], time_now=time_now)
+
+        self.assertIs(target, nearest)
+        self.assertIs(
+            find_immediate_run_order(
+                [later, nearest], time_now=time_now, exclude_task=nearest
+            ),
+            later,
+        )
+
+        later.time = datetime.strptime("2023-09-19 10:02", "%Y-%m-%d %H:%M")
+        nearest.time = datetime.strptime("2023-09-19 10:02:30", "%Y-%m-%d %H:%M:%S")
+        target = find_immediate_run_order([nearest, later], time_now=time_now)
+        self.assertIs(target, later)
+
+    def test_find_task_batch_end_uses_strict_three_minute_gap(self):
+        time_now = datetime.strptime("2023-09-19 10:00", "%Y-%m-%d %H:%M")
+        first = SchedulerTask(time=time_now, task_type=TaskTypes.SHIFT_ON)
+        second = SchedulerTask(
+            time=time_now + timedelta(minutes=2), task_type=TaskTypes.WORKSHOP
+        )
+        third = SchedulerTask(
+            time=time_now + timedelta(minutes=4), task_type=TaskTypes.RUN_ORDER
+        )
+        fourth = SchedulerTask(
+            time=time_now + timedelta(minutes=7), task_type=TaskTypes.SHIFT_ON
+        )
+
+        self.assertEqual(
+            find_task_batch_end([first, second, third, fourth], second), third.time
+        )
+
+    def test_scheduler_task_immediate_flag_defaults_to_false(self):
+        normal = SchedulerTask(task_type=TaskTypes.RUN_ORDER)
+        immediate = SchedulerTask(task_type=TaskTypes.RUN_ORDER, immediate=True)
+
+        self.assertFalse(normal.immediate)
+        self.assertTrue(immediate.immediate)
+
     def test_find_run_order_merge_pair(self):
         # 间隔20分钟的两个跑单任务应被识别为可合并
         time_now = datetime.strptime("2023-09-19 10:00", "%Y-%m-%d %H:%M")
@@ -125,15 +179,15 @@ class TestScheduling(unittest.TestCase):
             self._make_run_order("2023-09-19 10:30", "room_1_2"),
         ]
         pair = find_run_order_merge_pair(
-            tasks, run_order_delay=3, merge_margin=2, max_gap=30, time_now=time_now
+            tasks, run_order_delay=3, merge_interval=8, time_now=time_now
         )
         self.assertIsNotNone(pair)
         self.assertEqual(pair[0].meta_data, "room_1_1")
         self.assertEqual(pair[1].meta_data, "room_1_2")
-        self.assertEqual(pair[2], tasks[0].time + timedelta(minutes=3 + 2))
+        self.assertEqual(pair[2], tasks[0].time + timedelta(minutes=8))
         self.assertEqual(pair[3], tasks[0].time + timedelta(minutes=3))
-        # 合并目标间隔（阈值+余量）不会再触发过于接近修正
-        tasks[1].time = tasks[0].time + timedelta(minutes=3 + 2)
+        # 输入值代表合并后的最终间隔，不再把安全间隔和额外余量叠加到输入值上
+        tasks[1].time = tasks[0].time + timedelta(minutes=5)
         res = scheduling(tasks, run_order_delay=3, time_now=time_now)
         self.assertIsNone(res)
 
@@ -146,17 +200,17 @@ class TestScheduling(unittest.TestCase):
         ]
         self.assertIsNone(
             find_run_order_merge_pair(
-                tasks, run_order_delay=3, merge_margin=2, max_gap=30, time_now=time_now
+                tasks, run_order_delay=3, merge_interval=8, time_now=time_now
             )
         )
-        # 间隔超过 max_gap，不合并
+        # 提前量超过固定保护上限，不合并
         tasks = [
             self._make_run_order("2023-09-19 10:10", "room_1_1"),
             self._make_run_order("2023-09-19 10:50", "room_1_2"),
         ]
         self.assertIsNone(
             find_run_order_merge_pair(
-                tasks, run_order_delay=3, merge_margin=2, max_gap=30, time_now=time_now
+                tasks, run_order_delay=3, merge_interval=8, time_now=time_now
             )
         )
         # 维护期被调整过的任务不合并
@@ -166,7 +220,7 @@ class TestScheduling(unittest.TestCase):
         ]
         self.assertIsNone(
             find_run_order_merge_pair(
-                tasks, run_order_delay=3, merge_margin=2, max_gap=30, time_now=time_now
+                tasks, run_order_delay=3, merge_interval=8, time_now=time_now
             )
         )
         # 已经过去的任务不参与合并；没有未来锚点时不移动跑单
@@ -176,7 +230,7 @@ class TestScheduling(unittest.TestCase):
         ]
         self.assertIsNone(
             find_run_order_merge_pair(
-                tasks, run_order_delay=3, merge_margin=2, max_gap=30, time_now=time_now
+                tasks, run_order_delay=3, merge_interval=8, time_now=time_now
             )
         )
 
@@ -190,7 +244,7 @@ class TestScheduling(unittest.TestCase):
         ]
 
         anchor, run_order, target_time, threshold_floor = find_run_order_merge_pair(
-            tasks, run_order_delay=3, merge_margin=2, max_gap=30, time_now=time_now
+            tasks, run_order_delay=3, merge_interval=8, time_now=time_now
         )
 
         self.assertEqual(anchor.meta_data, "shift_on")
@@ -200,8 +254,38 @@ class TestScheduling(unittest.TestCase):
             datetime.strptime("2023-09-19 10:20", "%Y-%m-%d %H:%M"),
         )
         self.assertEqual(
-            target_time, datetime.strptime("2023-09-19 10:22", "%Y-%m-%d %H:%M")
+            target_time, datetime.strptime("2023-09-19 10:28", "%Y-%m-%d %H:%M")
         )
+
+    def test_find_run_order_merge_pair_uses_input_as_final_interval(self):
+        time_now = datetime.strptime("2023-07-10 17:00", "%Y-%m-%d %H:%M")
+        tasks = [
+            self._make_run_order("2023-07-10 17:21:08", "room_2_1"),
+            self._make_run_order("2023-07-10 17:29:23", "room_1_1"),
+        ]
+
+        pair = find_run_order_merge_pair(
+            tasks, run_order_delay=3, merge_interval=8, time_now=time_now
+        )
+
+        self.assertIsNotNone(pair)
+        self.assertEqual(
+            pair[2], datetime.strptime("2023-07-10 17:29:08", "%Y-%m-%d %H:%M:%S")
+        )
+
+    def test_find_run_order_merge_pair_clamps_minimum_interval(self):
+        time_now = datetime.strptime("2023-09-19 10:00", "%Y-%m-%d %H:%M")
+        tasks = [
+            self._make_run_order("2023-09-19 10:10", "room_1_1"),
+            self._make_run_order("2023-09-19 10:20", "room_1_2"),
+        ]
+
+        pair = find_run_order_merge_pair(
+            tasks, run_order_delay=3, merge_interval=3, time_now=time_now
+        )
+
+        self.assertIsNotNone(pair)
+        self.assertEqual(pair[2], tasks[0].time + timedelta(minutes=5))
 
     def test_find_next(self):
         # 测试 方程有效

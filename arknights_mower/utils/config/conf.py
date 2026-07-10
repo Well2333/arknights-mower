@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from pydantic import BaseModel, model_validator
+from pydantic import BaseModel, Field, model_validator
 from pydantic_core import PydanticUndefined
 
 from arknights_mower import __rootdir__
@@ -482,8 +482,8 @@ class RIICPart(ConfModel):
         "跑单前返回基建首页"
         merge_enable: bool = False
         "贴近跑单任务：用无人机加速将跑单时间拉近至上一个任务之后"
-        merge_max_gap: float = 30
-        "仅当预计提前量小于该值（分钟）时进行贴近"
+        merge_interval: float = Field(8, ge=5)
+        "贴近后两个任务之间的目标间隔（分钟），不得低于5分钟"
 
     class WorkShopSetting(ConfModel):
         items: list[WorkShopItem] = []

@@ -109,8 +109,14 @@ const show_feedback = ref(false)
 import PlayIcon from '@vicons/ionicons5/Play'
 import StopIcon from '@vicons/ionicons5/Stop'
 import AddIcon from '@vicons/ionicons5/Add'
+import FlashIcon from '@vicons/ionicons5/Flash'
 import CollapseIcon from '@vicons/fluent/PanelTopContract20Regular'
 import ExpandIcon from '@vicons/fluent/PanelTopExpand20Regular'
+import { useDialog, useMessage } from 'naive-ui'
+
+const dialog = useDialog()
+const message = useMessage()
+const immediate_run_order_loading = ref(false)
 
 const show_task_table = ref(true)
 const show_task = ref(false)
@@ -128,6 +134,35 @@ const bg_opacity = computed(() => {
 
 function stop_maa() {
   axios.get(`${import.meta.env.VITE_HTTP_URL}/stop-maa`)
+}
+
+function immediate_run_order() {
+  if (immediate_run_order_loading.value) return
+  dialog.warning({
+    title: '确认立即跑单',
+    content: '将使用无人机加速最近的贸易站，并立即执行跑单任务。是否继续？',
+    positiveText: '立即跑单',
+    negativeText: '取消',
+    onPositiveClick: async () => {
+      immediate_run_order_loading.value = true
+      try {
+        const { data } = await axios.post(
+          `${import.meta.env.VITE_HTTP_URL}/run-order/immediate`
+        )
+        if (data.success) {
+          message.success(data.message)
+          clearTimeout(get_task_id.value)
+          get_tasks()
+        } else {
+          message.warning(data.message)
+        }
+      } catch (error) {
+        message.error(`立即跑单失败: ${error.message}`)
+      } finally {
+        immediate_run_order_loading.value = false
+      }
+    }
+  })
 }
 
 const stop_options = [
@@ -242,6 +277,19 @@ const start_options = [
         </template>
         <template v-if="!mobile">新增任务</template>
       </n-button>
+      <n-button
+        type="warning"
+        :loading="immediate_run_order_loading"
+        :disabled="!running || waiting || immediate_run_order_loading"
+        @click="immediate_run_order"
+      >
+        <template #icon>
+          <n-icon>
+            <flash-icon />
+          </n-icon>
+        </template>
+        <template v-if="!mobile"><span class="custom-rainbow">立即跑单</span></template>
+      </n-button>
       <help-text v-if="!mobile">
         <div>目前只糊了一个勉强能用的版本，其他功能敬请期待</div>
         <div>只开放了空任务/专精/加工站任务</div>
@@ -289,6 +337,22 @@ const start_options = [
 </template>
 
 <style scoped lang="scss">
+.custom-rainbow {
+  background: linear-gradient(
+    90deg,
+    #ff4d4d 0%,
+    #ff9f43 20%,
+    #feca57 35%,
+    #1dd1a1 55%,
+    #54a0ff 75%,
+    #a55eea 100%
+  );
+  background-clip: text;
+  -webkit-background-clip: text;
+  color: transparent;
+  font-weight: 600;
+}
+
 .log {
   overflow: hidden;
   flex: 1;

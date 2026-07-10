@@ -7,7 +7,7 @@ import subprocess
 import time
 from functools import wraps
 from io import BytesIO
-from threading import Thread
+from threading import Lock, Thread
 
 import pytz
 from flask import Flask, abort, request, send_file, send_from_directory
@@ -56,6 +56,7 @@ if token := config.conf.webview.token:
     app.token = token
 
 mower_thread = None
+immediate_run_order_lock = Lock()
 log_lines = []
 ws_connections = []
 maa_check_job = {
@@ -274,6 +275,7 @@ def start(start_type):
     tmp_dir.mkdir(exist_ok=True)
 
     config.stop_mower.clear()
+    config.wake_mower.clear()
     saved_state = load_state()
     if saved_state is None or start_type == "2":
         saved_state = {}
@@ -1204,6 +1206,71 @@ def add_task():
             ]
         else:
             return []
+
+
+@app.route("/run-order/immediate", methods=["POST"])
+def immediate_run_order():
+    from arknights_mower.__main__ import base_scheduler
+    from arknights_mower.utils.scheduler_task import (
+        find_immediate_run_order,
+        find_task_batch_end,
+    )
+
+    if not base_scheduler or not mower_thread or not mower_thread.is_alive():
+        return {"success": False, "message": "添加任务失败！！请确保Mower正在运行"}
+    with immediate_run_order_lock:
+        now = datetime.datetime.now()
+        is_running_task = not getattr(base_scheduler, "sleeping", False)
+        active_task = getattr(base_scheduler, "task", None)
+        target = find_immediate_run_order(
+            base_scheduler.tasks,
+            time_now=now,
+            exclude_task=active_task if is_running_task else None,
+        )
+        if target is None:
+            return {"success": False, "message": "没有找到待执行的跑单任务"}
+        if getattr(target, "immediate", False):
+            return {
+                "success": True,
+                "message": f"立即跑单已安排：{target.meta_data}",
+                "room": target.meta_data,
+            }
+
+        original_time = target.time
+        defer_until_batch_end = is_running_task or (
+            target.time - now < datetime.timedelta(minutes=1)
+        )
+        if defer_until_batch_end:
+            batch_start = active_task if is_running_task and active_task else target
+            batch_end = find_task_batch_end(
+                base_scheduler.tasks,
+                batch_start,
+                batch_interval=config.conf.run_order_delay,
+            )
+            target.time = max(now, batch_end) + datetime.timedelta(seconds=1)
+            logger.info(
+                f"立即跑单请求进入任务批次：将在{target.time.strftime('%H:%M:%S')}"
+                "执行"
+            )
+        else:
+            target.time = now
+        target.immediate = True
+        base_scheduler.tasks.sort(key=lambda task: task.time)
+        if not is_running_task and not defer_until_batch_end:
+            config.wake_mower.set()
+        logger.info(
+            f"收到立即跑单请求：将{target.meta_data}的跑单从"
+            f"{original_time.strftime('%H:%M:%S')}提前到当前执行"
+        )
+        return {
+            "success": True,
+            "message": (
+                f"已安排立即跑单：{target.meta_data}"
+                if not defer_until_batch_end
+                else f"当前任务批次结束后立即跑单：{target.meta_data}"
+            ),
+            "room": target.meta_data,
+        }
 
 
 @app.route("/weekly-plans", methods=["GET"])
