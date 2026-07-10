@@ -335,9 +335,33 @@ class TestBaseScheduler(unittest.TestCase):
             patch.object(BaseSchedulerSolver, "drone") as mock_drone,
             patch.object(base_schedule.config.conf, "run_order_buffer_time", 1),
         ):
-            solver.agent_arrange({"room_1_1": ["Current"]})
+            solver.agent_arrange(
+                {
+                    "room_1_1": ["Current"],
+                    "dormitory_1": ["Current"],
+                }
+            )
 
         mock_drone.assert_called_once_with("room_1_1", not_customize=True)
+
+    @patch.object(BaseSchedulerSolver, "__init__", lambda x: None)
+    def test_immediate_run_order_does_not_wait_before_confirm(self):
+        solver = BaseSchedulerSolver()
+        solver.task = SchedulerTask(task_type=TaskTypes.RUN_ORDER, immediate=True)
+        solver.op_data = MagicMock()
+        solver.op_data.run_order_rooms = {"room_1_1": []}
+        solver.recog = MagicMock()
+        solver.find = MagicMock(return_value=None)
+        solver.sleep = MagicMock()
+        solver.tap = MagicMock()
+
+        with (
+            patch.object(base_schedule.config.conf, "run_order_buffer_time", 15),
+            patch.object(base_schedule.config.conf, "run_order_delay", 3),
+        ):
+            solver.tap_confirm("room_1_1", {"room_1_1": ["Current"]})
+
+        solver.sleep.assert_not_called()
 
     @patch.object(BaseSchedulerSolver, "__init__", lambda x: None)
     def test_infra_main_requests_restart_after_mood_read(self):

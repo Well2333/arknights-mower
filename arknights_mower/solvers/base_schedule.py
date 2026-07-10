@@ -180,7 +180,9 @@ class BaseSchedulerSolver(SceneGraphSolver, BaseMixin):
                     f"出现任务调度情况休息{reschedule_time}秒等待下一个任务开始"
                 )
                 # 等待下一个任务开始也是任务间空闲，走唯一的休眠收口点维护 sleeping
-                self._idle_sleep(reschedule_time)
+                if self._idle_sleep(reschedule_time):
+                    logger.info("任务队列已唤醒更新，重新选择下一个任务")
+                    return
         if self.party_time is not None and self.party_time < datetime.now():
             self.party_time = None
         if self.free_clue is not None and self.free_clue != get_server_weekday():
@@ -3056,7 +3058,7 @@ class BaseSchedulerSolver(SceneGraphSolver, BaseMixin):
                 ),
                 1,
             )
-            if wait_confirm > 0:
+            if wait_confirm > 0 and not getattr(self.task, "immediate", False):
                 logger.info(f"等待跑单 {str(wait_confirm)} 秒")
                 self.sleep(wait_confirm)
         retry_count = 0
@@ -3864,12 +3866,15 @@ class BaseSchedulerSolver(SceneGraphSolver, BaseMixin):
                         remaining_time = self.get_order_remaining_time()
                         if 0 < remaining_time < (config.conf.run_order_delay + 10) * 60:
                             if config.conf.run_order_buffer_time > 0:
-                                self.task.time = (
-                                    datetime.now()
-                                    + timedelta(seconds=remaining_time)
-                                    - timedelta(minutes=config.conf.run_order_delay)
-                                )
-                                logger.info(f"订单倒计时 {remaining_time}秒")
+                                if getattr(self.task, "immediate", False):
+                                    logger.info("立即跑单：保留当前执行时间，跳过跑单等待")
+                                else:
+                                    self.task.time = (
+                                        datetime.now()
+                                        + timedelta(seconds=remaining_time)
+                                        - timedelta(minutes=config.conf.run_order_delay)
+                                    )
+                                    logger.info(f"订单倒计时 {remaining_time}秒")
                                 self.back()
                                 self.turn_on_room_detail(room)
                         elif self.task.adjusted:
@@ -3983,7 +3988,8 @@ class BaseSchedulerSolver(SceneGraphSolver, BaseMixin):
         )
         for room in rooms:
             new_plan = self.agent_arrange_room(new_plan, room, plan, get_time=get_time)
-        if len(new_plan) == 1 and room != "train":
+        run_order_room = next(iter(new_plan)) if len(new_plan) == 1 else None
+        if run_order_room is not None and run_order_room != "train":
             force_drone = self.task.adjusted or getattr(
                 self.task, "immediate", False
             )
@@ -3993,7 +3999,7 @@ class BaseSchedulerSolver(SceneGraphSolver, BaseMixin):
                 elif getattr(self.task, "immediate", False):
                     logger.info("检测到立即跑单，强制使用无人机跑单")
                 logger.info("开始插拔")
-                self.drone(room, not_customize=True)
+                self.drone(run_order_room, not_customize=True)
             else:
                 # 葛朗台跑单模式
                 error_count = 0
@@ -4034,13 +4040,17 @@ class BaseSchedulerSolver(SceneGraphSolver, BaseMixin):
                     send_message("检测到漏单！", level="WARNING")
                 self.accept_order()
                 if self.drone_room is None or (
-                    self.drone_room == room and room in self.op_data.run_order_rooms
+                    self.drone_room == run_order_room
+                    and run_order_room in self.op_data.run_order_rooms
                 ):
                     drone_count = self.digit_reader.get_drone(self.recog.gray)
                     logger.info(f"当前无人机数量为：{drone_count}")
                     if drone_count >= config.conf.drone_count_limit:
                         self.drone(
-                            room, not_return=True, not_customize=True, skip_enter=True
+                            run_order_room,
+                            not_return=True,
+                            not_customize=True,
+                            skip_enter=True,
                         )
                 if config.conf.run_order_buffer_time > 0:
                     while self.find("bill_accelerate") is not None:
@@ -4049,7 +4059,6 @@ class BaseSchedulerSolver(SceneGraphSolver, BaseMixin):
                     self.back(interval=0.5)
                     self.back(interval=0.5)
             # 防止由于意外导致的死循环
-            run_order_room = next(iter(new_plan))
             if any(
                 any(char in item for item in new_plan[run_order_room])
                 for char in TRADE_ORDER_AGENTS
@@ -5043,7 +5052,9 @@ class BaseSchedulerSolver(SceneGraphSolver, BaseMixin):
         self.sleeping = True
         try:
             csleep(remaining_time, wake_event=config.wake_mower)
+            woke_by_task_update = config.wake_mower.is_set()
             self.recog.update()
+            return woke_by_task_update
         finally:
             config.wake_mower.clear()
             self.sleeping = False
