@@ -56,7 +56,7 @@ if token := config.conf.webview.token:
     app.token = token
 
 mower_thread = None
-immediate_run_order_lock = Lock()
+run_order_action_lock = Lock()
 log_lines = []
 ws_connections = []
 maa_check_job = {
@@ -1218,7 +1218,7 @@ def immediate_run_order():
 
     if not base_scheduler or not mower_thread or not mower_thread.is_alive():
         return {"success": False, "message": "添加任务失败！！请确保Mower正在运行"}
-    with immediate_run_order_lock:
+    with run_order_action_lock:
         now = datetime.datetime.now()
         is_running_task = not getattr(base_scheduler, "sleeping", False)
         active_task = getattr(base_scheduler, "task", None)
@@ -1270,6 +1270,45 @@ def immediate_run_order():
                 else f"当前任务批次结束后立即跑单：{target.meta_data}"
             ),
             "room": target.meta_data,
+        }
+
+
+@app.route("/run-order/defer-preceding-tasks", methods=["POST"])
+def defer_tasks_before_run_order():
+    from arknights_mower.__main__ import base_scheduler
+    from arknights_mower.utils.scheduler_task import (
+        defer_tasks_before_next_run_order,
+    )
+
+    if not base_scheduler or not mower_thread or not mower_thread.is_alive():
+        return {"success": False, "message": "推迟任务失败！！请确保Mower正在运行"}
+    with run_order_action_lock:
+        is_running_task = not getattr(base_scheduler, "sleeping", False)
+        active_task = getattr(base_scheduler, "task", None)
+        target, deferred = defer_tasks_before_next_run_order(
+            base_scheduler.tasks,
+            time_now=datetime.datetime.now(),
+            exclude_task=active_task if is_running_task else None,
+        )
+        if target is None:
+            return {"success": False, "message": "没有找到待执行的跑单任务"}
+        if not deferred:
+            return {
+                "success": False,
+                "message": f"{target.meta_data}跑单前没有可推迟的其他任务",
+            }
+
+        if not is_running_task:
+            config.wake_mower.set()
+        logger.info(
+            f"已将{target.meta_data}跑单前的{len(deferred)}个其他任务"
+            "推迟至跑单结束后"
+        )
+        return {
+            "success": True,
+            "message": f"已推迟{len(deferred)}个任务至{target.meta_data}跑单结束后",
+            "room": target.meta_data,
+            "count": len(deferred),
         }
 
 

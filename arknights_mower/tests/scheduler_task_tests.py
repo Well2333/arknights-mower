@@ -8,6 +8,7 @@ from arknights_mower.utils.scheduler_task import (
     SchedulerTask,
     TaskTypes,
     check_dorm_ordering,
+    defer_tasks_before_next_run_order,
     find_immediate_run_order,
     find_next_task,
     find_run_order_merge_pair,
@@ -163,6 +164,74 @@ class TestScheduling(unittest.TestCase):
         self.assertEqual(
             find_task_batch_end([first, second, third, fourth], second), third.time
         )
+
+    def test_defer_tasks_before_next_run_order_preserves_order(self):
+        time_now = datetime.strptime("2023-09-19 10:00", "%Y-%m-%d %H:%M")
+        overdue = SchedulerTask(
+            time=time_now - timedelta(minutes=1),
+            task_type=TaskTypes.SHIFT_ON,
+            meta_data="overdue",
+        )
+        current = SchedulerTask(
+            time=time_now,
+            task_type=TaskTypes.WORKSHOP,
+            meta_data="current",
+        )
+        before = SchedulerTask(
+            time=time_now + timedelta(minutes=5),
+            task_type=TaskTypes.SHIFT_OFF,
+            meta_data="before",
+        )
+        target = SchedulerTask(
+            time=time_now + timedelta(minutes=10),
+            task_type=TaskTypes.RUN_ORDER,
+            meta_data="room_1_1",
+        )
+        same_time = SchedulerTask(
+            time=target.time,
+            task_type=TaskTypes.RECRUIT,
+            meta_data="same_time",
+        )
+        later = SchedulerTask(
+            time=time_now + timedelta(minutes=20),
+            task_type=TaskTypes.SHIFT_ON,
+            meta_data="later",
+        )
+        next_run_order = SchedulerTask(
+            time=time_now + timedelta(minutes=30),
+            task_type=TaskTypes.RUN_ORDER,
+            meta_data="room_1_2",
+        )
+        tasks = [later, same_time, target, current, next_run_order, before, overdue]
+
+        selected, deferred = defer_tasks_before_next_run_order(
+            tasks,
+            time_now=time_now,
+            exclude_task=current,
+        )
+
+        self.assertIs(selected, target)
+        self.assertEqual(deferred, [overdue, before, same_time])
+        self.assertEqual(current.time, time_now)
+        self.assertEqual(overdue.time, target.time + timedelta(seconds=1))
+        self.assertEqual(before.time, target.time + timedelta(seconds=2))
+        self.assertEqual(same_time.time, target.time + timedelta(seconds=3))
+        self.assertEqual(later.time, time_now + timedelta(minutes=20))
+        self.assertEqual(next_run_order.time, time_now + timedelta(minutes=30))
+        self.assertEqual(tasks[1:5], [target, overdue, before, same_time])
+
+    def test_defer_tasks_before_next_run_order_handles_empty_candidates(self):
+        time_now = datetime.strptime("2023-09-19 10:00", "%Y-%m-%d %H:%M")
+        later = SchedulerTask(
+            time=time_now + timedelta(minutes=5), task_type=TaskTypes.SHIFT_ON
+        )
+
+        target, deferred = defer_tasks_before_next_run_order(
+            [later], time_now=time_now
+        )
+
+        self.assertIsNone(target)
+        self.assertEqual(deferred, [])
 
     def test_scheduler_task_immediate_flag_defaults_to_false(self):
         normal = SchedulerTask(task_type=TaskTypes.RUN_ORDER)

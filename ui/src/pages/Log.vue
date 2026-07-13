@@ -110,6 +110,7 @@ import PlayIcon from '@vicons/ionicons5/Play'
 import StopIcon from '@vicons/ionicons5/Stop'
 import AddIcon from '@vicons/ionicons5/Add'
 import FlashIcon from '@vicons/ionicons5/Flash'
+import PlaySkipForwardIcon from '@vicons/ionicons5/PlaySkipForward'
 import CollapseIcon from '@vicons/fluent/PanelTopContract20Regular'
 import ExpandIcon from '@vicons/fluent/PanelTopExpand20Regular'
 import { useDialog, useMessage } from 'naive-ui'
@@ -117,6 +118,7 @@ import { useDialog, useMessage } from 'naive-ui'
 const dialog = useDialog()
 const message = useMessage()
 const immediate_run_order_loading = ref(false)
+const defer_run_order_tasks_loading = ref(false)
 
 const show_task_table = ref(true)
 const show_task = ref(false)
@@ -160,6 +162,35 @@ function immediate_run_order() {
         message.error(`立即跑单失败: ${error.message}`)
       } finally {
         immediate_run_order_loading.value = false
+      }
+    }
+  })
+}
+
+function defer_tasks_before_run_order() {
+  if (defer_run_order_tasks_loading.value) return
+  dialog.warning({
+    title: '确认推迟其他任务',
+    content: '将下一个跑单前的全部其他待执行任务推迟到该跑单结束后。是否继续？',
+    positiveText: '确认推迟',
+    negativeText: '取消',
+    onPositiveClick: async () => {
+      defer_run_order_tasks_loading.value = true
+      try {
+        const { data } = await axios.post(
+          `${import.meta.env.VITE_HTTP_URL}/run-order/defer-preceding-tasks`
+        )
+        if (data.success) {
+          message.success(data.message)
+          clearTimeout(get_task_id.value)
+          get_tasks()
+        } else {
+          message.warning(data.message)
+        }
+      } catch (error) {
+        message.error(`推迟任务失败: ${error.message}`)
+      } finally {
+        defer_run_order_tasks_loading.value = false
       }
     }
   })
@@ -280,7 +311,9 @@ const start_options = [
       <n-button
         type="warning"
         :loading="immediate_run_order_loading"
-        :disabled="!running || waiting || immediate_run_order_loading"
+        :disabled="
+          !running || waiting || immediate_run_order_loading || defer_run_order_tasks_loading
+        "
         @click="immediate_run_order"
       >
         <template #icon>
@@ -289,6 +322,21 @@ const start_options = [
           </n-icon>
         </template>
         <template v-if="!mobile"><span class="custom-rainbow">立即跑单</span></template>
+      </n-button>
+      <n-button
+        type="warning"
+        :loading="defer_run_order_tasks_loading"
+        :disabled="
+          !running || waiting || defer_run_order_tasks_loading || immediate_run_order_loading
+        "
+        @click="defer_tasks_before_run_order"
+      >
+        <template #icon>
+          <n-icon>
+            <play-skip-forward-icon />
+          </n-icon>
+        </template>
+        <template v-if="!mobile">推迟其他任务</template>
       </n-button>
       <help-text v-if="!mobile">
         <div>目前只糊了一个勉强能用的版本，其他功能敬请期待</div>

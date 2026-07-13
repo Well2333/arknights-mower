@@ -272,6 +272,39 @@ def find_immediate_run_order(tasks, time_now=None, exclude_task=None):
     return run_orders[0] if run_orders else None
 
 
+def defer_tasks_before_next_run_order(tasks, time_now=None, exclude_task=None):
+    """将下一次跑单前的非跑单任务依次推迟到跑单之后。
+
+    ``exclude_task`` 用于排除已经开始执行、无法再推迟的当前任务。返回目标跑单和
+    被推迟的任务列表；没有未来跑单时目标为 ``None``。
+    """
+    target = find_immediate_run_order(
+        tasks,
+        time_now=time_now,
+        exclude_task=exclude_task,
+    )
+    if target is None:
+        return None, []
+
+    deferred = sorted(
+        (
+            task
+            for task in tasks
+            if task is not exclude_task
+            and task is not target
+            and task.type != TaskTypes.RUN_ORDER
+            and task.time <= target.time
+        ),
+        key=lambda task: task.time,
+    )
+    deferred_time = target.time
+    for task in deferred:
+        deferred_time += timedelta(seconds=1)
+        task.time = deferred_time
+    tasks.sort(key=lambda task: task.time)
+    return target, deferred
+
+
 def find_task_batch_end(tasks, start_task, batch_interval=RUN_ORDER_MIN_INTERVAL):
     """返回从 start_task 所在位置开始的连续任务批次结束时间。
 
