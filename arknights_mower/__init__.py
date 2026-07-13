@@ -2,7 +2,9 @@ import platform
 import sys
 from pathlib import Path
 
-__version__ = "4.1.5.6-custom-runorder3-immediate-runorder-mergeinterval-fix2"
+__version__ = (
+    "4.1.5.7-custom-runorder3-immediate-runorder-mergeinterval-fix2-defer-tasks"
+)
 
 if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
     __rootdir__ = Path(sys._MEIPASS).joinpath("arknights_mower").resolve()
