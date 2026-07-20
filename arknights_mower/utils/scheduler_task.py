@@ -12,6 +12,149 @@ from arknights_mower.utils.log import logger
 from arknights_mower.utils.news_checker import NewsChecker
 from arknights_mower.utils.operators import Operator
 
+SHIFT_ON_READINESS_RETRY_PREFIX = "shift_on_readiness_retry:"
+SHIFT_ON_READINESS_RETRY_MINUTES = 10
+
+
+def calculate_shift_on_mood(
+    lower_limit,
+    upper_limit,
+    resting_threshold,
+    buffer=2.0,
+):
+    """计算带滞回的安全回班心情门槛。"""
+    if upper_limit <= lower_limit:
+        return upper_limit
+    threshold = max(0.0, min(float(resting_threshold), 1.0))
+    target = lower_limit + (upper_limit - lower_limit) * threshold + buffer
+    return max(lower_limit, min(target, upper_limit))
+
+
+def estimate_mood_ready_at(
+    now,
+    observed_at,
+    observed_mood,
+    full_at,
+    target_mood,
+    upper_limit,
+):
+    """根据一次稳定的宿舍观测和回满 ETA 估算达到目标心情的时间。"""
+    if full_at is None:
+        return None
+    if full_at <= now:
+        return now
+    if (
+        observed_at is None
+        or observed_at > now
+        or observed_mood is None
+        or observed_mood < 0
+        or observed_mood > upper_limit
+        or upper_limit <= observed_mood
+        or full_at <= observed_at
+    ):
+        return full_at
+    if observed_mood >= target_mood:
+        return now
+    ratio = (target_mood - observed_mood) / (upper_limit - observed_mood)
+    if not 0 <= ratio <= 1:
+        return full_at
+    ready_at = observed_at + (full_at - observed_at) * ratio
+    return max(now, min(ready_at, full_at))
+
+
+def shift_on_not_before(task_plan, ready_at_by_operator):
+    """返回任务中所有已知休息干员的最晚安全回班时间。"""
+    assigned = {
+        name
+        for names in task_plan.values()
+        for name in names
+        if name not in ["Current", "Free", ""]
+    }
+    ready_times = [
+        ready_at_by_operator[name]
+        for name in assigned
+        if name in ready_at_by_operator
+    ]
+    return max(ready_times, default=None)
+
+
+def delay_shift_on_tasks_until_ready(
+    tasks,
+    ready_at_by_operator,
+    blocked_operators=None,
+):
+    """把回班任务钳制到安全时间，返回需要重读宿舍数据的干员。"""
+    blocked_operators = blocked_operators or set()
+    deferred_operators = set()
+    kept = []
+    for task in tasks:
+        if task.type != TaskTypes.SHIFT_ON:
+            kept.append(task)
+            continue
+        assigned = {
+            name
+            for names in task.plan.values()
+            for name in names
+            if name not in ["Current", "Free", ""]
+        }
+        blocked = assigned & blocked_operators
+        if blocked:
+            deferred_operators.update(blocked)
+            logger.warning(
+                f"缺少安全回班时间，暂不生成任务: {sorted(blocked)}"
+            )
+            continue
+        not_before = shift_on_not_before(task.plan, ready_at_by_operator)
+        if not_before is not None and task.time < not_before:
+            logger.info(f"回班任务由 {task.time} 延后至安全时间 {not_before}")
+            task.time = not_before
+        kept.append(task)
+    tasks[:] = sorted(kept, key=lambda task: task.time)
+    return deferred_operators
+
+
+def shift_on_readiness_retry_names(meta_data):
+    """解析安全回班宿舍重读任务中的干员列表。"""
+    if not meta_data.startswith(SHIFT_ON_READINESS_RETRY_PREFIX):
+        return []
+    return [
+        name
+        for name in meta_data.removeprefix(SHIFT_ON_READINESS_RETRY_PREFIX).split(",")
+        if name
+    ]
+
+
+def schedule_shift_on_readiness_retry(tasks, operators, now, existing_time=None):
+    """为缺失 ETA 的回班任务安排一次不会执行排班的宿舍重读。"""
+    if not operators:
+        return
+    retry_time = now + timedelta(minutes=SHIFT_ON_READINESS_RETRY_MINUTES)
+    if existing_time is not None:
+        retry_time = min(retry_time, existing_time)
+    task = SchedulerTask(
+        time=retry_time,
+        task_plan={},
+        task_type=TaskTypes.NOT_SPECIFIC,
+        meta_data=SHIFT_ON_READINESS_RETRY_PREFIX + ",".join(sorted(operators)),
+    )
+    tasks.append(task)
+    tasks.sort(key=lambda item: item.time)
+
+
+def sanitize_self_correction_plan(plan, resting_high_names):
+    """确保纠错任务不会把正在宿舍或位置未知的高效干员拉回工作区。"""
+    sanitized = copy.deepcopy(plan)
+    for room in list(sanitized):
+        if room.startswith("dormitory"):
+            continue
+        sanitized[room] = [
+            "Current" if name in resting_high_names else name
+            for name in sanitized[room]
+        ]
+        if all(name == "Current" for name in sanitized[room]):
+            del sanitized[room]
+    return sanitized
+
 
 class TaskTypes(Enum):
     RUN_ORDER = ("run_order", "跑单", 1)
@@ -38,6 +181,42 @@ class TaskTypes(Enum):
         obj.display_value = display_value
         obj.priority = priority
         return obj
+
+
+def collect_shift_on_readiness(op_data, now):
+    """收集当前所有休息主力的安全回班时间。"""
+    dorm_by_name = {dorm.name: dorm for dorm in op_data.dorm if dorm.name}
+    ready_at_by_operator = {}
+    blocked_operators = set()
+    for name, operator in op_data.operators.items():
+        dorm = dorm_by_name.get(name)
+        if (
+            not operator.is_high()
+            or operator.workaholic
+            or operator.room.startswith("dorm")
+            or (dorm is None and not operator.is_resting())
+        ):
+            continue
+        full_at = dorm.time if dorm is not None else None
+        target_mood = calculate_shift_on_mood(
+            operator.lower_limit,
+            operator.upper_limit,
+            op_data.config.resting_threshold,
+        )
+        ready_at = estimate_mood_ready_at(
+            now,
+            operator.time_stamp,
+            operator.mood,
+            full_at,
+            target_mood,
+            operator.upper_limit,
+        )
+        if ready_at is None:
+            blocked_operators.add(name)
+            logger.warning(f"{name} 缺少宿舍回满时间，等待重新读取后再生成回班任务")
+        else:
+            ready_at_by_operator[name] = ready_at
+    return ready_at_by_operator, blocked_operators
 
 
 def find_next_task(
@@ -305,9 +484,24 @@ def generate_plan_by_drom(tasks, op_data):
 
 
 def plan_metadata(op_data, tasks):
-    # 清除，重新添加刷新
+    current_time = datetime.now()
+    ready_at_by_operator, blocked_operators = collect_shift_on_readiness(
+        op_data, current_time
+    )
+    existing_retry_time = min(
+        (
+            task.time
+            for task in tasks
+            if shift_on_readiness_retry_names(task.meta_data)
+        ),
+        default=None,
+    )
+    # 清除，重新添加刷新；重试任务也由本轮真实 blocked 状态重建
     tasks = [
-        t for t in tasks if t.type not in [TaskTypes.SHIFT_ON, TaskTypes.RELEASE_DORM]
+        t
+        for t in tasks
+        if t.type not in [TaskTypes.SHIFT_ON, TaskTypes.RELEASE_DORM]
+        and not shift_on_readiness_retry_names(t.meta_data)
     ]
     _time = datetime.max
     min_resting_time = datetime.max
@@ -327,7 +521,7 @@ def plan_metadata(op_data, tasks):
     for agent in total_agent:
         # 如果全红脸，使用急救模式
         predicted_rest_time = max(
-            agent.predict_exhaust(), datetime.now() + timedelta(minutes=30)
+            agent.predict_exhaust(), current_time + timedelta(minutes=30)
         )
         min_resting_time = min(min_resting_time, predicted_rest_time)
 
@@ -432,7 +626,7 @@ def plan_metadata(op_data, tasks):
             min_resting_time += timedelta(seconds=10)
             if room.time and room.name:
                 task_time = min(room.time, min_resting_time)
-                if task_time < datetime.now():
+                if task_time < current_time:
                     # 如果干员休息完毕，则不再生成
                     continue
                 if task_time not in new_task:
@@ -440,6 +634,17 @@ def plan_metadata(op_data, tasks):
                 else:
                     new_task[task_time] = (new_task[task_time][0].append(room), None)
     tasks.extend(generate_plan_by_drom(new_task, op_data))
+    delay_shift_on_tasks_until_ready(
+        tasks,
+        ready_at_by_operator,
+        blocked_operators,
+    )
+    schedule_shift_on_readiness_retry(
+        tasks,
+        blocked_operators,
+        current_time,
+        existing_retry_time,
+    )
     return tasks
 
 

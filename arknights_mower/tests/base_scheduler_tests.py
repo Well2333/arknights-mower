@@ -5,8 +5,8 @@ from unittest.mock import MagicMock, patch
 import arknights_mower.solvers.base_schedule as base_schedule
 from arknights_mower.solvers.base_schedule import BaseSchedulerSolver
 from arknights_mower.utils.logic_expression import LogicExpression
-from arknights_mower.utils.operators import Operator
-from arknights_mower.utils.plan import Plan, PlanConfig, Room
+from arknights_mower.utils.operators import Dormitory, Operator
+from arknights_mower.utils.plan import Plan, PlanConfig, PlanTriggerTiming, Room
 from arknights_mower.utils.recognize import Scene
 from arknights_mower.utils.scheduler_task import TaskTypes, find_next_task
 
@@ -387,6 +387,264 @@ class TestBaseScheduler(unittest.TestCase):
             any(task.type == TaskTypes.SELF_CORRECTION for task in solver.tasks)
         )
 
+
+class TestSchedulerStability(unittest.TestCase):
+    def _make_fia_solver(self, grouped):
+        now = datetime(2026, 7, 21, 10, 0)
+        solver = BaseSchedulerSolver.__new__(BaseSchedulerSolver)
+        solver.task = SchedulerTask(time=now)
+        group = "test_group" if grouped else ""
+        target = Operator(
+            "Target",
+            "central",
+            index=0,
+            group=group,
+            current_room="dormitory_1",
+            current_index=0,
+            mood=1,
+            upper_limit=24,
+            lower_limit=0,
+            operator_type="high",
+            time_stamp=now,
+        )
+        other = Operator(
+            "Other",
+            "room_1_1",
+            index=0,
+            group=group,
+            current_room="room_1_1",
+            current_index=0,
+            mood=20,
+            operator_type="high",
+            time_stamp=now,
+        )
+        solver.op_data = MagicMock()
+        solver.op_data.operators = {"Target": target, "Other": other}
+        solver.op_data.groups = {group: ["Target", "Other"]} if grouped else {}
+        shift = SchedulerTask(
+            time=now + timedelta(hours=2),
+            task_plan={"central": ["Target"]},
+            task_type=TaskTypes.SHIFT_ON,
+        )
+        solver.tasks = [shift]
+        return solver, shift, now
+
+    @patch.object(BaseSchedulerSolver, "check_fia")
+    def test_plan_fia_does_not_advance_group_shift_on(self, check_fia):
+        solver, shift, now = self._make_fia_solver(grouped=True)
+        check_fia.return_value = (["Target"], "dormitory_1")
+
+        with patch.object(base_schedule.config.conf, "fia_fool", True):
+            solver.plan_fia()
+
+        self.assertEqual(shift.time, now + timedelta(hours=2))
+        self.assertTrue(
+            any(task.type == TaskTypes.FIAMMETTA for task in solver.tasks)
+        )
+
+    @patch.object(BaseSchedulerSolver, "check_fia")
+    def test_plan_fia_still_advances_ungrouped_shift_on(self, check_fia):
+        solver, shift, now = self._make_fia_solver(grouped=False)
+        check_fia.return_value = (["Target"], "dormitory_1")
+
+        with patch.object(base_schedule.config.conf, "fia_fool", True):
+            solver.plan_fia()
+
+        self.assertEqual(shift.time, now + timedelta(seconds=1))
+        self.assertTrue(
+            any(task.type == TaskTypes.FIAMMETTA for task in solver.tasks)
+        )
+
+
+    @patch.object(BaseSchedulerSolver, "__init__", lambda x: None)
+    def test_readiness_retry_scans_dorm_without_arranging(self):
+        solver = BaseSchedulerSolver()
+        retry = SchedulerTask(
+            task_plan={},
+            task_type=TaskTypes.NOT_SPECIFIC,
+            meta_data="shift_on_readiness_retry:Resting",
+        )
+        solver.task = retry
+        solver.tasks = [retry]
+        solver.op_data = MagicMock()
+        solver.op_data.operators = {
+            "Resting": Operator(
+                "Resting",
+                "central",
+                group="group",
+                current_room="",
+                current_index=0,
+                mood=10,
+                operator_type="high",
+            )
+        }
+        solver.op_data.dorm = [
+            Dormitory(("dormitory_2", 0), "Resting", None)
+        ]
+        shift = SchedulerTask(
+            time=datetime.now() + timedelta(hours=1),
+            task_plan={"central": ["Resting"]},
+            task_type=TaskTypes.SHIFT_ON,
+        )
+
+        with (
+            patch.object(BaseSchedulerSolver, "find", return_value=True),
+            patch.object(BaseSchedulerSolver, "enter_room") as enter_room,
+            patch.object(BaseSchedulerSolver, "get_agent_from_room") as read_room,
+            patch.object(BaseSchedulerSolver, "back") as back,
+            patch.object(
+                BaseSchedulerSolver,
+                "plan_metadata",
+                side_effect=lambda: solver.tasks.append(shift),
+            ) as replan,
+            patch.object(BaseSchedulerSolver, "backup_plan_solver") as backup,
+            patch.object(BaseSchedulerSolver, "agent_arrange") as arrange,
+        ):
+            solver.infra_main()
+
+        enter_room.assert_called_once_with("dormitory_2")
+        read_room.assert_called_once_with("dormitory_2")
+        back.assert_called_once_with()
+        arrange.assert_not_called()
+        replan.assert_called_once_with()
+        backup.assert_called_once_with(PlanTriggerTiming.AFTER_PLANNING)
+        self.assertEqual(solver.tasks, [shift])
+        self.assertIsNone(solver.task)
+
+    @patch.object(BaseSchedulerSolver, "__init__", lambda x: None)
+    def test_readiness_retry_failure_replaces_expired_task_with_future_retry(self):
+        solver = BaseSchedulerSolver()
+        now = datetime.now()
+        retry = SchedulerTask(
+            time=now - timedelta(minutes=1),
+            task_plan={},
+            task_type=TaskTypes.NOT_SPECIFIC,
+            meta_data="shift_on_readiness_retry:Resting",
+        )
+        future_retry = SchedulerTask(
+            time=now + timedelta(minutes=10),
+            task_plan={},
+            task_type=TaskTypes.NOT_SPECIFIC,
+            meta_data="shift_on_readiness_retry:Resting",
+        )
+        solver.task = retry
+        solver.tasks = [retry]
+        solver.error = False
+        solver.op_data = MagicMock()
+        solver.op_data.operators = {
+            "Resting": Operator(
+                "Resting",
+                "central",
+                group="group",
+                current_room="dormitory_2",
+                current_index=0,
+                mood=10,
+                operator_type="high",
+            )
+        }
+        solver.op_data.dorm = [
+            Dormitory(("dormitory_2", 0), "Resting", None)
+        ]
+
+        with (
+            patch.object(BaseSchedulerSolver, "find", return_value=True),
+            patch.object(BaseSchedulerSolver, "enter_room"),
+            patch.object(
+                BaseSchedulerSolver,
+                "get_agent_from_room",
+                side_effect=RuntimeError("ocr failed"),
+            ),
+            patch.object(BaseSchedulerSolver, "back") as back,
+            patch.object(
+                BaseSchedulerSolver,
+                "plan_metadata",
+                side_effect=lambda: solver.tasks.append(future_retry),
+            ) as replan,
+        ):
+            solver.infra_main()
+
+        back.assert_called_once_with()
+        replan.assert_called_once_with()
+        self.assertNotIn(retry, solver.tasks)
+        self.assertEqual(solver.tasks, [future_retry])
+        self.assertGreater(future_retry.time, now)
+        self.assertTrue(solver.error)
+        self.assertIsNone(solver.task)
+
+    def _make_correction_safety_solver(self, include_ordinary_mismatch):
+        now = datetime.now()
+        resting = Operator(
+            "Resting",
+            "central",
+            index=0,
+            group="group",
+            current_room="dormitory_1",
+            current_index=0,
+            mood=10,
+            operator_type="high",
+            time_stamp=now,
+        )
+        unknown = Operator(
+            "Unknown",
+            "room_1_1",
+            index=0,
+            group="group",
+            current_room="",
+            current_index=-1,
+            mood=10,
+            operator_type="high",
+            time_stamp=now,
+        )
+        operators = {"Resting": resting, "Unknown": unknown}
+        plan = {
+            "central": [Room("Resting", "group", [])],
+            "room_1_1": [Room("Unknown", "group", [])],
+        }
+        current = {"central": [""], "room_1_1": [""]}
+        if include_ordinary_mismatch:
+            ordinary = Operator(
+                "Expected",
+                "meeting",
+                index=0,
+                current_room="",
+                current_index=-1,
+                mood=10,
+                operator_type="high",
+                time_stamp=now,
+            )
+            operators["Expected"] = ordinary
+            plan["meeting"] = [Room("Expected", "", [])]
+            current["meeting"] = ["Other"]
+
+        solver = BaseSchedulerSolver.__new__(BaseSchedulerSolver)
+        solver.tasks = []
+        solver.op_data = MagicMock()
+        solver.op_data.operators = operators
+        solver.op_data.groups = {"group": ["Resting", "Unknown"]}
+        solver.op_data.plan = plan
+        solver.op_data.true_exhaust_room = set()
+        solver.op_data.get_current_room.side_effect = (
+            lambda room, _bypass: current[room]
+        )
+        return solver
+
+    def test_self_correction_keeps_other_fix_but_blocks_resting_and_unknown_group(self):
+        solver = self._make_correction_safety_solver(True)
+
+        result = solver.agent_get_mood(skip_dorm=True)
+
+        self.assertEqual(result, "self_correction")
+        self.assertEqual(len(solver.tasks), 1)
+        self.assertEqual(solver.tasks[0].type, TaskTypes.SELF_CORRECTION)
+        self.assertEqual(solver.tasks[0].plan, {"meeting": ["Expected"]})
+
+    def test_self_correction_is_not_created_when_only_protected_group_remains(self):
+        solver = self._make_correction_safety_solver(False)
+
+        result = solver.agent_get_mood(skip_dorm=True)
+
+        self.assertIsNone(result)
+        self.assertEqual(solver.tasks, [])
 
 if __name__ == "__main__":
     unittest.main()

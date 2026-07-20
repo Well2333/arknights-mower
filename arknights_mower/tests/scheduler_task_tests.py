@@ -2,14 +2,22 @@ import unittest
 from datetime import datetime, timedelta
 from unittest.mock import MagicMock, patch
 
-from arknights_mower.utils.operators import Operators
+from arknights_mower.utils.operators import Dormitory, Operator, Operators
 from arknights_mower.utils.plan import Plan, PlanConfig, Room
 from arknights_mower.utils.scheduler_task import (
     SchedulerTask,
     TaskTypes,
+    calculate_shift_on_mood,
     check_dorm_ordering,
+    collect_shift_on_readiness,
+    delay_shift_on_tasks_until_ready,
+    estimate_mood_ready_at,
     find_next_task,
+    plan_metadata,
+    sanitize_self_correction_plan,
+    shift_on_readiness_retry_names,
     scheduling,
+    shift_on_not_before,
     try_reorder,
 )
 
@@ -492,3 +500,290 @@ class TestScheduling(unittest.TestCase):
         op_data.operators["月见夜"].current_index = 2
 
         return op_data
+
+
+class TestShiftOnSafety(unittest.TestCase):
+    def test_calculate_shift_on_mood_uses_runtime_threshold_and_buffer(self):
+        self.assertAlmostEqual(calculate_shift_on_mood(0, 24, 0.65), 17.6)
+        self.assertAlmostEqual(calculate_shift_on_mood(0, 24, 0.70), 18.8)
+        self.assertAlmostEqual(calculate_shift_on_mood(12, 24, 0.65), 21.8)
+        self.assertEqual(calculate_shift_on_mood(0, 24, 2), 24)
+        self.assertEqual(calculate_shift_on_mood(0, 24, -1), 2)
+
+    def test_estimate_mood_ready_at_interpolates_from_stable_observation(self):
+        observed_at = datetime(2026, 7, 21, 10, 0)
+        now = observed_at + timedelta(minutes=5)
+        full_at = datetime(2026, 7, 21, 17, 0)
+
+        ready_at = estimate_mood_ready_at(
+            now=now,
+            observed_at=observed_at,
+            observed_mood=10,
+            full_at=full_at,
+            target_mood=17.6,
+            upper_limit=24,
+        )
+
+        self.assertEqual(ready_at, datetime(2026, 7, 21, 13, 48))
+
+    def test_estimate_mood_ready_at_is_conservative_for_missing_data(self):
+        now = datetime(2026, 7, 21, 10, 0)
+        full_at = now + timedelta(hours=3)
+
+        self.assertEqual(
+            estimate_mood_ready_at(now, None, 10, full_at, 18, 24), full_at
+        )
+        self.assertEqual(
+            estimate_mood_ready_at(now, now, -1, full_at, 18, 24), full_at
+        )
+        self.assertIsNone(
+            estimate_mood_ready_at(now, now, 10, None, 18, 24)
+        )
+        self.assertEqual(
+            estimate_mood_ready_at(now, now, 19, full_at, 18, 24), now
+        )
+
+    def test_shift_on_not_before_uses_latest_resting_operator(self):
+        now = datetime(2026, 7, 21, 10, 0)
+        plan = {
+            "central": ["A", "Current", "B"],
+            "room_1_2": ["C", "Current", "Current"],
+        }
+        ready = {
+            "A": now + timedelta(hours=1),
+            "B": now + timedelta(hours=2),
+        }
+
+        self.assertEqual(shift_on_not_before(plan, ready), now + timedelta(hours=2))
+
+    def test_delay_shift_on_tasks_preserves_other_tasks_and_blocks_unknown_eta(self):
+        now = datetime(2026, 7, 21, 10, 0)
+        shift = SchedulerTask(
+            time=now + timedelta(minutes=22),
+            task_plan={"central": ["A"]},
+            task_type=TaskTypes.SHIFT_ON,
+        )
+        blocked = SchedulerTask(
+            time=now + timedelta(minutes=30),
+            task_plan={"meeting": ["B"]},
+            task_type=TaskTypes.SHIFT_ON,
+        )
+        run_order = SchedulerTask(
+            time=now + timedelta(minutes=40),
+            task_type=TaskTypes.RUN_ORDER,
+            meta_data="room_1_1",
+        )
+        tasks = [shift, blocked, run_order]
+
+        deferred = delay_shift_on_tasks_until_ready(
+            tasks,
+            {"A": now + timedelta(hours=2)},
+            blocked_operators={"B"},
+        )
+
+        self.assertEqual(deferred, {"B"})
+        self.assertEqual(shift.time, now + timedelta(hours=2))
+        self.assertNotIn(blocked, tasks)
+        self.assertIn(run_order, tasks)
+        self.assertEqual(run_order.time, now + timedelta(minutes=40))
+
+    def test_sanitize_self_correction_never_moves_resting_high_to_work(self):
+        plan = {
+            "central": ["Resting", "Wrong"],
+            "room_1_2": ["Resting", "Current"],
+            "dormitory_1": ["Current", "Resting"],
+        }
+
+        sanitized = sanitize_self_correction_plan(plan, {"Resting"})
+
+        self.assertEqual(sanitized["central"], ["Current", "Wrong"])
+        self.assertNotIn("room_1_2", sanitized)
+        self.assertEqual(sanitized["dormitory_1"], ["Current", "Resting"])
+
+    def test_plan_metadata_clamps_group_to_latest_safe_mood_time(self):
+        now = datetime.now()
+        first = Operator(
+            "A",
+            "central",
+            index=0,
+            group="group",
+            current_room="dormitory_1",
+            mood=10,
+            upper_limit=24,
+            lower_limit=0,
+            operator_type="high",
+            time_stamp=now,
+        )
+        second = Operator(
+            "B",
+            "room_1_2",
+            index=0,
+            group="group",
+            current_room="dormitory_2",
+            mood=8,
+            upper_limit=24,
+            lower_limit=0,
+            operator_type="high",
+            time_stamp=now,
+        )
+        working = MagicMock()
+        working.is_high.return_value = True
+        working.is_resting.return_value = False
+        working.room = "meeting"
+        working.lower_limit = 0
+        working.current_mood.return_value = 0
+        working.predict_exhaust.return_value = now
+
+        first_dorm = Dormitory(("dormitory_1", 0), "A", now + timedelta(hours=2))
+        second_dorm = Dormitory(("dormitory_2", 0), "B", now + timedelta(hours=3))
+        op_data = MagicMock()
+        op_data.operators = {"A": first, "B": second, "W": working}
+        op_data.dorm = [first_dorm, second_dorm]
+        op_data.groups = {"group": ["A", "B"]}
+        op_data.plan = {"central": [None], "room_1_2": [None]}
+        op_data.config.resting_threshold = 0.7
+        op_data.config.free_room = False
+        op_data.power_plant_count = 2
+        run_order = SchedulerTask(
+            time=now + timedelta(hours=1),
+            task_type=TaskTypes.RUN_ORDER,
+            meta_data="room_2_1",
+        )
+
+        tasks = plan_metadata(op_data, [run_order])
+
+        shift_on = next(task for task in tasks if task.type == TaskTypes.SHIFT_ON)
+        expected = now + timedelta(hours=3) * ((18.8 - 8) / (24 - 8))
+        self.assertAlmostEqual(
+            (shift_on.time - expected).total_seconds(),
+            0,
+            delta=0.1,
+        )
+        self.assertIn(run_order, tasks)
+        self.assertEqual(run_order.time, now + timedelta(hours=1))
+
+    def test_fixed_dorm_operator_is_not_a_shift_on_candidate(self):
+        now = datetime(2026, 7, 21, 10, 0)
+        fixed = Operator(
+            "菲亚梅塔",
+            "dormitory_1",
+            current_room="dormitory_1",
+            current_index=0,
+            mood=10,
+            operator_type="high",
+            time_stamp=now,
+        )
+        op_data = MagicMock()
+        op_data.operators = {"菲亚梅塔": fixed}
+        op_data.dorm = []
+        op_data.config.resting_threshold = 0.7
+
+        ready, blocked = collect_shift_on_readiness(op_data, now)
+
+        self.assertEqual(ready, {})
+        self.assertEqual(blocked, set())
+
+    def test_missing_eta_schedules_retry_then_recovers_shift_on(self):
+        now = datetime.now()
+        first = Operator(
+            "A",
+            "central",
+            index=0,
+            group="group",
+            current_room="dormitory_1",
+            current_index=0,
+            mood=10,
+            operator_type="high",
+            time_stamp=now,
+        )
+        second = Operator(
+            "B",
+            "room_1_2",
+            index=0,
+            group="group",
+            current_room="dormitory_2",
+            current_index=0,
+            mood=10,
+            operator_type="high",
+            time_stamp=now,
+        )
+        first_dorm = Dormitory(("dormitory_1", 0), "A", None)
+        second_dorm = Dormitory(("dormitory_2", 0), "B", now + timedelta(hours=2))
+        op_data = MagicMock()
+        op_data.operators = {"A": first, "B": second}
+        op_data.dorm = [first_dorm, second_dorm]
+        op_data.groups = {"group": ["A", "B"]}
+        op_data.plan = {"central": [None], "room_1_2": [None]}
+        op_data.config.resting_threshold = 0.7
+        op_data.config.free_room = False
+        op_data.power_plant_count = 2
+
+        tasks = plan_metadata(op_data, [])
+
+        self.assertFalse(any(task.type == TaskTypes.SHIFT_ON for task in tasks))
+        retry = next(task for task in tasks if task.type == TaskTypes.NOT_SPECIFIC)
+        self.assertEqual(shift_on_readiness_retry_names(retry.meta_data), ["A"])
+        retry_time = retry.time
+        first.current_room = ""
+        tasks = plan_metadata(op_data, tasks)
+        retry = next(task for task in tasks if task.type == TaskTypes.NOT_SPECIFIC)
+        self.assertEqual(retry.time, retry_time)
+        self.assertEqual(shift_on_readiness_retry_names(retry.meta_data), ["A"])
+        self.assertFalse(any(task.type == TaskTypes.SHIFT_ON for task in tasks))
+
+        first_dorm.time = now + timedelta(hours=3)
+        tasks = plan_metadata(op_data, tasks)
+
+        self.assertTrue(any(task.type == TaskTypes.SHIFT_ON for task in tasks))
+        self.assertFalse(
+            any(shift_on_readiness_retry_names(task.meta_data) for task in tasks)
+        )
+
+    def test_single_and_full_group_missing_eta_each_schedule_one_retry(self):
+        now = datetime.now()
+        for grouped in [False, True]:
+            with self.subTest(grouped=grouped):
+                names = ["A", "B"] if grouped else ["A"]
+                operators = {}
+                dorms = []
+                plan = {}
+                for index, name in enumerate(names):
+                    room = "central" if index == 0 else "room_1_2"
+                    dorm_room = f"dormitory_{index + 1}"
+                    operators[name] = Operator(
+                        name,
+                        room,
+                        index=0,
+                        group="group" if grouped else "",
+                        current_room=dorm_room,
+                        current_index=0,
+                        mood=10,
+                        operator_type="high",
+                        time_stamp=now,
+                    )
+                    dorms.append(Dormitory((dorm_room, 0), name, None))
+                    plan[room] = [None]
+                op_data = MagicMock()
+                op_data.operators = operators
+                op_data.dorm = dorms
+                op_data.groups = {"group": names} if grouped else {}
+                op_data.plan = plan
+                op_data.config.resting_threshold = 0.7
+                op_data.config.free_room = False
+                op_data.power_plant_count = 2
+
+                tasks = plan_metadata(op_data, [])
+
+                self.assertFalse(
+                    any(task.type == TaskTypes.SHIFT_ON for task in tasks)
+                )
+                retries = [
+                    task
+                    for task in tasks
+                    if shift_on_readiness_retry_names(task.meta_data)
+                ]
+                self.assertEqual(len(retries), 1)
+                self.assertEqual(
+                    set(shift_on_readiness_retry_names(retries[0].meta_data)),
+                    set(names),
+                )

@@ -73,6 +73,8 @@ from arknights_mower.utils.scheduler_task import (
     check_dorm_ordering,
     find_next_task,
     plan_metadata,
+    sanitize_self_correction_plan,
+    shift_on_readiness_retry_names,
     scheduling,
     try_add_release_dorm,
     try_reorder,
@@ -440,6 +442,12 @@ class BaseSchedulerSolver(SceneGraphSolver, BaseMixin):
                 if task.type == TaskTypes.SHIFT_ON:
                     for room, operators in task.plan.items():
                         if target in operators:
+                            if self.op_data.operators[target].group:
+                                logger.info(
+                                    f"{target}属于多人组，菲亚充能不提前整组回班"
+                                )
+                                self.tasks.sort(key=lambda task: task.time)
+                                return
                             task.time = self.task.time + timedelta(seconds=1)
                             self.tasks.sort(key=lambda task: task.time)
                             return
@@ -606,7 +614,42 @@ class BaseSchedulerSolver(SceneGraphSolver, BaseMixin):
                         self.plan_run_order(self.task.meta_data)
                     self.skip(["todo_task", "collect_notification"])
                 elif self.task.type == TaskTypes.NOT_SPECIFIC:
-                    pass
+                    retry_names = shift_on_readiness_retry_names(self.task.meta_data)
+                    if retry_names:
+                        logger.info(f"重读宿舍 ETA: {retry_names}")
+                        dorm_rooms = set()
+                        dorm_by_name = {
+                            dorm.name: dorm
+                            for dorm in self.op_data.dorm
+                            if dorm.name
+                        }
+                        for name in retry_names:
+                            if name not in self.op_data.operators:
+                                continue
+                            dorm = dorm_by_name.get(name)
+                            if dorm is not None:
+                                dorm_rooms.add(dorm.position[0])
+                            else:
+                                room = self.op_data.operators[name].current_room
+                                if room.startswith("dorm"):
+                                    dorm_rooms.add(room)
+                        if self.task in self.tasks:
+                            self.tasks.remove(self.task)
+                        try:
+                            for room in sorted(dorm_rooms):
+                                self.enter_room(room)
+                                try:
+                                    self.get_agent_from_room(room)
+                                finally:
+                                    self.back()
+                        except Exception as retry_error:
+                            logger.exception(f"重读宿舍 ETA 失败: {retry_error}")
+                            self.error = True
+                        self.plan_metadata()
+                        if self.tasks and self.tasks[0].type == TaskTypes.SHIFT_ON:
+                            self.backup_plan_solver(PlanTriggerTiming.AFTER_PLANNING)
+                        self.task = None
+                        return
                 del self.tasks[0]
                 if self.tasks and self.tasks[0].type in [TaskTypes.SHIFT_ON]:
                     self.backup_plan_solver(PlanTriggerTiming.AFTER_PLANNING)
@@ -908,42 +951,35 @@ class BaseSchedulerSolver(SceneGraphSolver, BaseMixin):
             if len(remove_keys) > 0:
                 for item in remove_keys:
                     del fix_plan[item]
-            # 还要确保同一组在同时上班
+            # 混合组只能由合法换班任务收敛，纠错不得把休息成员拉回岗位
             for g in self.op_data.groups:
                 g_agents = self.op_data.groups[g]
-                is_any_working = next(
-                    (
-                        x
-                        for x in g_agents
-                        if self.op_data.operators[x].current_room != ""
-                        and not self.op_data.operators[x].is_resting()
-                    ),
-                    None,
+                working = any(
+                    self.op_data.operators[x].current_room != ""
+                    and not self.op_data.operators[x].is_resting()
+                    for x in g_agents
                 )
-                if is_any_working is not None:
-                    # 确保所有人同时在上班
-                    is_any_resting = next(
-                        (
-                            x
-                            for x in g_agents
-                            if self.op_data.operators[x].current_room == ""
-                            or self.op_data.operators[x].is_resting()
-                        ),
-                        None,
+                resting = any(
+                    self.op_data.operators[x].current_room == ""
+                    or self.op_data.operators[x].is_resting()
+                    for x in g_agents
+                )
+                if working and resting:
+                    logger.warning(
+                        f"{g}组处于部分工作、部分休息状态，等待合法换班任务收敛"
                     )
-                    if is_any_resting is not None:
-                        # 生成纠错任务
-                        for x in g_agents:
-                            if (
-                                self.op_data.operators[x].current_room == ""
-                                or self.op_data.operators[x].is_resting()
-                            ):
-                                room = self.op_data.operators[x].room
-                                if room == "train":
-                                    continue
-                                if room not in fix_plan:
-                                    fix_plan[room] = ["Current"] * len(plan[room])
-                                fix_plan[room][self.op_data.operators[x].index] = x
+            protected_high_names = {
+                operator.name
+                for operator in self.op_data.operators.values()
+                if operator.is_high()
+                and (
+                    operator.is_resting()
+                    or (operator.group and operator.current_room == "")
+                )
+            }
+            fix_plan = sanitize_self_correction_plan(
+                fix_plan, protected_high_names
+            )
             if len(fix_plan.keys()) > 0:
                 # 如果5分钟之内有任务则跳过心情读取
                 next_task = self.find_next_task()
