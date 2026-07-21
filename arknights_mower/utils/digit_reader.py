@@ -47,7 +47,9 @@ class DigitReader:
         ch = [str(result[k]) for k in sorted(result)]
         return int("".join(ch))
 
-    def get_time(self, img_grey, h, w):
+    def get_time(self, img_grey, h=None, w=None):
+        if h is None or w is None:
+            h, w = img_grey.shape[:2]
         digit_part = img_grey[h * 510 // 1080 : h * 543 // 1080, w * 499 // 1920 : w]
         digit_part = cv2.resize(digit_part, (1421, 33), interpolation=cv2.INTER_AREA)
         result = {}

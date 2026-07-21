@@ -3610,14 +3610,17 @@ class BaseSchedulerSolver(SceneGraphSolver, BaseMixin):
             self.tap((self.recog.w * 0.05, self.recog.h * 0.95), interval=0.5)
             error_count += 1
         # 订单剩余时间
-        execute_time = self.double_read_time(
+        remaining_time = self.read_time(
             (
                 (int(self.recog.w * 650 / 2496), int(self.recog.h * 660 / 1404)),
                 (int(self.recog.w * 815 / 2496), int(self.recog.h * 710 / 1404)),
             ),
+            None,
             use_digit_reader=True,
         )
-        return round((execute_time - datetime.now()).total_seconds(), 1)
+        if remaining_time is None:
+            raise Exception("订单倒计时识别失败")
+        return float(remaining_time)
 
     def current_room_changed(self, instance):
         if not self.op_data.first_init:
@@ -3921,20 +3924,7 @@ class BaseSchedulerSolver(SceneGraphSolver, BaseMixin):
                     self.tap((self.recog.w * 0.05, self.recog.h * 0.95), interval=0.5)
                     error_count += 1
                 # 订单剩余时间
-                execute_time = self.double_read_time(
-                    (
-                        (
-                            int(self.recog.w * 650 / 2496),
-                            int(self.recog.h * 660 / 1404),
-                        ),
-                        (
-                            int(self.recog.w * 815 / 2496),
-                            int(self.recog.h * 710 / 1404),
-                        ),
-                    ),
-                    use_digit_reader=True,
-                )
-                wait_time = round((execute_time - datetime.now()).total_seconds(), 1)
+                wait_time = self.get_order_remaining_time()
                 logger.debug(f"停止{wait_time}秒等待订单完成")
                 if 0 < wait_time < config.conf.run_order_delay * 60:
                     logger.info(f"停止{wait_time}秒等待订单完成")

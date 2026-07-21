@@ -23,6 +23,23 @@ DATE_FORMAT = None
 basic_formatter = logging.Formatter(BASIC_FORMAT, DATE_FORMAT)
 color_formatter = colorlog.ColoredFormatter(COLOR_FORMAT, DATE_FORMAT)
 
+class EncodingSafeStream:
+    """Escape characters unsupported by a terminal without losing the log line."""
+
+    def __init__(self, stream):
+        self.stream = stream
+
+    def write(self, message):
+        encoding = getattr(self.stream, "encoding", None)
+        if encoding:
+            message = message.encode(encoding, errors="backslashreplace").decode(
+                encoding
+            )
+        return self.stream.write(message)
+
+    def __getattr__(self, name):
+        return getattr(self.stream, name)
+
 
 def _is_flask_reloader_parent() -> bool:
     # `flask --reload` starts a watchdog parent process and a serving child process.
@@ -50,7 +67,7 @@ logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
 
 # d(ebug)hlr: 终端输出
-dhlr = logging.StreamHandler(stream=sys.stdout)
+dhlr = logging.StreamHandler(stream=EncodingSafeStream(sys.stdout))
 dhlr.setFormatter(color_formatter)
 dhlr.setLevel(logging.DEBUG)
 dhlr.addFilter(filter)
