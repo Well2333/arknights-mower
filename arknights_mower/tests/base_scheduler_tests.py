@@ -311,6 +311,58 @@ class TestBaseScheduler(unittest.TestCase):
         self.assertEqual([item["agent"] for item in result], ["", ""])
 
     @patch.object(BaseSchedulerSolver, "__init__", lambda x: None)
+    def test_tap_confirm_reuses_first_match_position(self):
+        solver = BaseSchedulerSolver()
+        solver.task = SchedulerTask(task_type=TaskTypes.SHIFT_ON)
+        solver.op_data = MagicMock()
+        solver.op_data.run_order_rooms = {}
+        solver.recog = MagicMock()
+        solver.find = MagicMock(side_effect=[(10, 20), None, None, None])
+        solver.sleep = MagicMock()
+        solver.tap = MagicMock()
+        solver.tap_element = MagicMock()
+
+        solver.tap_confirm("room_1_1")
+
+        solver.tap.assert_called_once_with((10, 20))
+        solver.tap_element.assert_not_called()
+
+    @patch.object(BaseSchedulerSolver, "__init__", lambda x: None)
+    def test_run_order_with_next_order_timer_collects_and_replans(self):
+        solver = BaseSchedulerSolver()
+        solver.task = SchedulerTask(task_type=TaskTypes.RUN_ORDER)
+        solver.task.adjusted = False
+        solver.op_data = MagicMock()
+        solver.op_data.run_order_rooms = {"room_1_1": []}
+        solver.op_data.get_current_room.return_value = ["CurrentAgent"]
+        solver.turn_on_room_detail = MagicMock()
+        solver.get_order_remaining_time = MagicMock(return_value=3 * 60 * 60)
+        solver.back = MagicMock()
+        solver.accept_order = MagicMock()
+        solver.reset_room_time = MagicMock()
+
+        with (
+            patch.object(
+                base_schedule.config.conf.run_order_grandet_mode,
+                "buffer_time",
+                15,
+            ),
+            patch.object(base_schedule.config.conf, "run_order_delay", 5),
+            patch.object(base_schedule, "send_message"),
+        ):
+            result = solver.agent_arrange_room(
+                {"room_1_1": ["CurrentAgent"]},
+                "room_1_1",
+                {"room_1_1": ["RunOrderAgent"]},
+                skip_enter=True,
+            )
+
+        self.assertEqual(result, {})
+        solver.back.assert_called_once_with()
+        solver.accept_order.assert_called_once_with()
+        solver.reset_room_time.assert_called_once_with("room_1_1")
+
+    @patch.object(BaseSchedulerSolver, "__init__", lambda x: None)
     def test_infra_main_requests_restart_after_mood_read(self):
         solver = BaseSchedulerSolver()
         solver.task = None

@@ -2980,14 +2980,14 @@ class BaseSchedulerSolver(SceneGraphSolver, BaseMixin):
                 logger.info(f"等待跑单 {str(wait_confirm)} 秒")
                 self.sleep(wait_confirm)
         retry_count = 0
-        while self.find("confirm_blue") and retry_count < 4:
-            self.tap_element("confirm_blue")
+        while (confirm_pos := self.find("confirm_blue")) and retry_count < 4:
+            self.tap(confirm_pos)
             self.sleep(0.5)
             self.recog.update()
             retry_count += 1
         retry_count = 0
-        while self.find("confirm_train") and retry_count < 4:
-            self.tap_element("confirm_train")
+        while (confirm_pos := self.find("confirm_train")) and retry_count < 4:
+            self.tap(confirm_pos)
             self.sleep(0.5)
             self.recog.update()
             retry_count += 1
@@ -3798,6 +3798,21 @@ class BaseSchedulerSolver(SceneGraphSolver, BaseMixin):
                         elif self.task.adjusted:
                             self.back()
                             self.turn_on_room_detail(room)
+                        elif remaining_time >= (
+                            config.conf.run_order_delay + 10
+                        ) * 60:
+                            logger.warning(
+                                f"订单倒计时 {remaining_time}秒已超出当前跑单窗口，"
+                                "可能上一订单提前完成；尝试领取并重新计算下一单"
+                            )
+                            send_message(
+                                "检测到订单提前完成，正在领取并重新计算下一单",
+                                level="WARNING",
+                            )
+                            self.back()
+                            self.accept_order()
+                            self.reset_room_time(room)
+                            return {}
                         else:
                             logger.info("检测到漏单")
                             send_message("检测到漏单！", level="WARNING")
