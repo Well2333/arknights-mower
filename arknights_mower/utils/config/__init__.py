@@ -66,6 +66,7 @@ load_plan()
 
 stop_mower = Event()
 stop_maa = Event()
+wake_mower = Event()
 
 # 日志
 log_queue = Queue()

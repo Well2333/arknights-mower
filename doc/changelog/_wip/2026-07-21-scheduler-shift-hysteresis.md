@@ -1,28 +1,32 @@
 ---
-date: 2026-07-21
-branch: fix/scheduler-shift-hysteresis
+date: 2026-08-03
+branch: fix/scheduler-stability-upstream-20260803
 merge_commit: pending
 type: fix
 scope: 基建排班调度
 guideline_changed: true
 ---
 
-# 阻止低心情工作组短周期回班振荡
+# 同步上游并收敛基建排班功能面
 
 ## 做了什么
 
 - 按运行时 `resting_threshold` 和 `+2` 心情缓冲计算安全回班门槛，并对完整动态休息组取最晚就绪时间；最终钳制覆盖急救与既有提前路径。
 - `SELF_CORRECTION` 统一清洗宿舍主力和位置未知的分组主力，只保留普通错位纠正；清洗后为空则不创建任务。
 - 菲亚梅塔只允许无分组目标提前回班；任何已分组目标保持原安全 `SHIFT_ON` 时间。
+- 基于最新 `upstream/dev` 重建修复分支，纳入 MAA 连通性检测与专精计划上游修复。
+- 移除 dev-custom 的周计划表格、相邻跑单自动合并、可调贴近策略和“推迟其他任务”操作。
+- 仅保留最小“立即跑单”按钮/API：唤醒休眠队列、标记最近未来跑单并强制无人机，不改动其他任务。
+- `immediate` 状态可随任务缓存跨停止/重启保留；启动和任务唤醒完成后清理事件，避免陈旧信号或丢失唤醒。
 - ETA 缺失时创建幂等的专用宿舍重读任务；固定宿舍岗被排除，扫描异常或 OCR 漏识别不会执行不安全回班或形成逾期紧循环。
 
 ## 验证
 
-- 四个修改文件本地 `py_compile` 与 `git diff --check` 通过。
-- Windows 隔离 staging：`TestShiftOnSafety` 10 项、`TestSchedulerStability` 6 项、原 scheduler 模块 33 项、原 BaseScheduler 9 项、MergeRunOrder 5 项均通过。
-- 全项目 73 项中 72 项通过；唯一错误是实例 `9a872fbc` 的 `simulate()` 不支持开发分支既有 `startup_maa_check` 测试参数，与本修复无关，已单独记录为基线版本差异。
-- 历史序列的线上 90 分钟/2 小时回放仍属于部署后的灰度门禁，尚未宣告通过。
-- 运行实例精确候选回归 32/32、20/20 通过；源码备份和哈希校验后已部署。重计时的 T+10 冒烟通过：PM2/WebUI/调度在线，未来任务队列正常，无异常换班、自纠正、ERROR 或重读紧循环；90 分钟及后续灰度门禁仍继续观察。
+- 本地全量 `compileall` 与 `git diff --check` 通过；本机缺少 `evalidate`、`cv2`，完整单测改在实例 Python 环境执行。
+- Windows 隔离 staging 运行 77 项排班/任务/宿舍/OCR/日志/MAA 测试及 2 项立即跑单 API 测试，共 79 项全部通过。
+- WebUI 生产构建通过，Vite 完成 6677 个模块转换；构建产物只包含“立即跑单”入口。
+- 提交级和全文审计确认不存在相邻跑单自动合并、推迟任务、`MaaWeeklyNew` 或 custom 分支策略文件。
+- 当前合并分支尚未部署到生产实例；历史 90 分钟/2 小时灰度结果仍有效，部署后需重新观察运行时门禁。
 
 ## 为什么
 
@@ -32,6 +36,12 @@ guideline_changed: true
 
 - `arknights_mower/utils/scheduler_task.py`
 - `arknights_mower/solvers/base_schedule.py`
+- `arknights_mower/utils/config/__init__.py`
+- `arknights_mower/utils/csleep.py`
+- `arknights_mower/__main__.py`
+- `arknights_mower/solvers/record.py`
+- `server.py`
+- `ui/src/pages/Log.vue`
 - `arknights_mower/tests/scheduler_task_tests.py`
 - `arknights_mower/tests/base_scheduler_tests.py`
 - `doc/guidelines/scheduler-stability.md`

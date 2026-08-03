@@ -1,6 +1,7 @@
 <script setup>
 import { storeToRefs } from 'pinia'
 import { onMounted, onUnmounted, inject, nextTick, watch, ref } from 'vue'
+import { useDialog, useMessage } from 'naive-ui'
 
 import { useMowerStore } from '@/stores/mower'
 const mower_store = useMowerStore()
@@ -109,8 +110,13 @@ const show_feedback = ref(false)
 import PlayIcon from '@vicons/ionicons5/Play'
 import StopIcon from '@vicons/ionicons5/Stop'
 import AddIcon from '@vicons/ionicons5/Add'
+import FlashIcon from '@vicons/ionicons5/Flash'
 import CollapseIcon from '@vicons/fluent/PanelTopContract20Regular'
 import ExpandIcon from '@vicons/fluent/PanelTopExpand20Regular'
+
+const dialog = useDialog()
+const message = useMessage()
+const immediate_run_order_loading = ref(false)
 
 const show_task_table = ref(true)
 const show_task = ref(false)
@@ -130,6 +136,32 @@ function stop_maa() {
   axios.get(`${import.meta.env.VITE_HTTP_URL}/stop-maa`)
 }
 
+function immediate_run_order() {
+  if (immediate_run_order_loading.value) return
+  dialog.warning({
+    title: '确认立即跑单',
+    content: '将使用无人机加速最近的贸易站，并立即执行跑单任务。是否继续？',
+    positiveText: '立即跑单',
+    negativeText: '取消',
+    onPositiveClick: async () => {
+      immediate_run_order_loading.value = true
+      try {
+        const { data } = await axios.post(`${import.meta.env.VITE_HTTP_URL}/run-order/immediate`)
+        if (data.success) {
+          message.success(data.message)
+          clearTimeout(get_task_id.value)
+          get_tasks()
+        } else {
+          message.warning(data.message)
+        }
+      } catch (error) {
+        message.error(`立即跑单失败: ${error.message}`)
+      } finally {
+        immediate_run_order_loading.value = false
+      }
+    }
+  })
+}
 const stop_options = [
   {
     label: '停止Maa',
@@ -241,6 +273,19 @@ const start_options = [
           </n-icon>
         </template>
         <template v-if="!mobile">新增任务</template>
+      </n-button>
+      <n-button
+        type="warning"
+        :loading="immediate_run_order_loading"
+        :disabled="!running || waiting || immediate_run_order_loading"
+        @click="immediate_run_order"
+      >
+        <template #icon>
+          <n-icon>
+            <flash-icon />
+          </n-icon>
+        </template>
+        <template v-if="!mobile">立即跑单</template>
       </n-button>
       <help-text v-if="!mobile">
         <div>目前只糊了一个勉强能用的版本，其他功能敬请期待</div>

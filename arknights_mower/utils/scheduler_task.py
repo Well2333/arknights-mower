@@ -377,6 +377,48 @@ def scheduling(tasks, run_order_delay=5, execution_time=0.75, time_now=None):
         tasks.sort(key=lambda x: x.time)
 
 
+
+
+def find_immediate_run_order(tasks, time_now=None, exclude_task=None):
+    """返回任务队列中时间最近的未来跑单任务。"""
+    if time_now is None:
+        time_now = datetime.now()
+    run_orders = sorted(
+        (
+            task
+            for task in tasks
+            if task is not exclude_task
+            and task.type == TaskTypes.RUN_ORDER
+            and task.time >= time_now
+        ),
+        key=lambda task: task.time,
+    )
+    return run_orders[0] if run_orders else None
+
+
+def find_task_batch_end(tasks, start_task, batch_interval=3):
+    """返回 start_task 所在连续任务批次的结束时间。"""
+    ordered = sorted(tasks, key=lambda task: task.time)
+    if not any(task is start_task for task in ordered):
+        ordered.append(start_task)
+        ordered.sort(key=lambda task: task.time)
+    start_index = next(
+        index for index, task in enumerate(ordered) if task is start_task
+    )
+    while (
+        start_index > 0
+        and ordered[start_index].time - ordered[start_index - 1].time
+        < timedelta(minutes=batch_interval)
+    ):
+        start_index -= 1
+    end_index = start_index
+    while (
+        end_index + 1 < len(ordered)
+        and ordered[end_index + 1].time - ordered[end_index].time
+        < timedelta(minutes=batch_interval)
+    ):
+        end_index += 1
+    return ordered[end_index].time
 def adjust_run_order_for_maintenance(tasks, run_order_delay=5):
     """
     将维护期附近的 RUN_ORDER 任务提前到维护前，避免维护期冲突。
@@ -1004,7 +1046,13 @@ class SchedulerTask:
     meta_data = ""
 
     def __init__(
-        self, time=None, task_plan={}, task_type="", meta_data="", adjusted=False
+        self,
+        time=None,
+        task_plan={},
+        task_type="",
+        meta_data="",
+        adjusted=False,
+        immediate=False,
     ):
         if time is None:
             self.time = datetime.now()
@@ -1014,6 +1062,7 @@ class SchedulerTask:
         self.type = set_type_enum(task_type)
         self.meta_data = meta_data
         self.adjusted = adjusted
+        self.immediate = immediate
 
     def format(self, time_offset=0):
         res = copy.deepcopy(self)

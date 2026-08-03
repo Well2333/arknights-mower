@@ -8,7 +8,11 @@ from arknights_mower.utils.logic_expression import LogicExpression
 from arknights_mower.utils.operators import Dormitory, Operator
 from arknights_mower.utils.plan import Plan, PlanConfig, PlanTriggerTiming, Room
 from arknights_mower.utils.recognize import Scene
-from arknights_mower.utils.scheduler_task import TaskTypes, find_next_task
+from arknights_mower.utils.scheduler_task import (
+    SchedulerTask,
+    TaskTypes,
+    find_next_task,
+)
 
 with patch.dict("sys.modules", {"RecruitSolver": MagicMock()}):
     pass
@@ -393,6 +397,79 @@ class TestBaseScheduler(unittest.TestCase):
         solver.back.assert_called_once_with()
         solver.accept_order.assert_called_once_with()
         solver.reset_room_time.assert_called_once_with("room_1_1")
+
+    @patch.object(BaseSchedulerSolver, "__init__", lambda x: None)
+    def test_immediate_run_order_forces_drone_for_trade_room(self):
+        solver = BaseSchedulerSolver()
+        solver.task = SchedulerTask(
+            task_type=TaskTypes.RUN_ORDER,
+            immediate=True,
+            meta_data="room_1_1",
+        )
+        solver.tasks = []
+        solver.find = MagicMock(return_value=None)
+        solver.op_data = MagicMock()
+        solver.op_data.run_order_rooms = {"room_1_1": []}
+        solver.op_data.plan = {"room_1_1": []}
+        arranged = {"room_1_1": ["Current"]}
+
+        with (
+            patch.object(
+                BaseSchedulerSolver,
+                "agent_arrange_room",
+                return_value=arranged,
+            ),
+            patch.object(BaseSchedulerSolver, "drone") as mock_drone,
+            patch.object(
+                base_schedule.config.conf.run_order_grandet_mode,
+                "buffer_time",
+                1,
+            ),
+        ):
+            solver.agent_arrange(
+                {
+                    "room_1_1": ["Current"],
+                    "dormitory_1": ["Current"],
+                }
+            )
+
+        mock_drone.assert_called_once_with("room_1_1", not_customize=True)
+
+    @patch.object(BaseSchedulerSolver, "__init__", lambda x: None)
+    def test_immediate_run_order_skips_confirmation_wait(self):
+        solver = BaseSchedulerSolver()
+        solver.task = SchedulerTask(task_type=TaskTypes.RUN_ORDER, immediate=True)
+        solver.op_data = MagicMock()
+        solver.op_data.run_order_rooms = {"room_1_1": []}
+        solver.recog = MagicMock()
+        solver.find = MagicMock(return_value=None)
+        solver.sleep = MagicMock()
+
+        with (
+            patch.object(
+                base_schedule.config.conf.run_order_grandet_mode,
+                "buffer_time",
+                15,
+            ),
+            patch.object(base_schedule.config.conf, "run_order_delay", 3),
+        ):
+            solver.tap_confirm("room_1_1", {"room_1_1": ["Current"]})
+
+        solver.sleep.assert_not_called()
+
+    @patch.object(BaseSchedulerSolver, "__init__", lambda x: None)
+    def test_idle_sleep_wake_event_reselects_task_and_clears_state(self):
+        solver = BaseSchedulerSolver()
+        solver.sleeping = False
+        solver.recog = MagicMock()
+        base_schedule.config.wake_mower.set()
+
+        woke = solver._idle_sleep(30)
+
+        self.assertTrue(woke)
+        self.assertFalse(solver.sleeping)
+        self.assertFalse(base_schedule.config.wake_mower.is_set())
+        solver.recog.update.assert_called_once_with()
 
     @patch.object(BaseSchedulerSolver, "__init__", lambda x: None)
     def test_infra_main_requests_restart_after_mood_read(self):

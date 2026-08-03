@@ -1,3 +1,4 @@
+import pickle
 import unittest
 from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
@@ -17,6 +18,8 @@ from arknights_mower.utils.scheduler_task import (
     collect_shift_on_readiness,
     delay_shift_on_tasks_until_ready,
     estimate_mood_ready_at,
+    find_immediate_run_order,
+    find_task_batch_end,
     find_next_task,
     plan_metadata,
     parse_scheduler_task_time,
@@ -176,6 +179,64 @@ class TestScheduling(unittest.TestCase):
         self.assertEqual(tasks[2].plan["task"], "Task 4")
         self.assertEqual(res, None)
 
+    def test_find_immediate_run_order_selects_nearest_future_order(self):
+        now = datetime(2026, 8, 3, 10, 0)
+        nearest = SchedulerTask(
+            time=now + timedelta(minutes=10),
+            task_type=TaskTypes.RUN_ORDER,
+            meta_data="room_1_1",
+        )
+        later = SchedulerTask(
+            time=now + timedelta(minutes=20),
+            task_type=TaskTypes.RUN_ORDER,
+            meta_data="room_1_2",
+        )
+
+        self.assertIs(
+            find_immediate_run_order([later, nearest], time_now=now),
+            nearest,
+        )
+        self.assertIs(
+            find_immediate_run_order(
+                [later, nearest],
+                time_now=now,
+                exclude_task=nearest,
+            ),
+            later,
+        )
+
+    def test_find_task_batch_end_stops_at_safe_gap(self):
+        now = datetime(2026, 8, 3, 10, 0)
+        first = SchedulerTask(time=now, task_type=TaskTypes.SHIFT_ON)
+        second = SchedulerTask(
+            time=now + timedelta(minutes=2),
+            task_type=TaskTypes.WORKSHOP,
+        )
+        third = SchedulerTask(
+            time=now + timedelta(minutes=4),
+            task_type=TaskTypes.RUN_ORDER,
+        )
+        fourth = SchedulerTask(
+            time=now + timedelta(minutes=7),
+            task_type=TaskTypes.SHIFT_ON,
+        )
+
+        self.assertEqual(
+            find_task_batch_end([first, second, third, fourth], second),
+            third.time,
+        )
+
+    def test_immediate_flag_survives_restart_state_pickle(self):
+        task = SchedulerTask(
+            task_type=TaskTypes.RUN_ORDER,
+            meta_data="room_1_1",
+            immediate=True,
+        )
+
+        restored = pickle.loads(pickle.dumps(task))
+
+        self.assertTrue(restored.immediate)
+        self.assertEqual(restored.type, TaskTypes.RUN_ORDER)
     def test_find_next(self):
         # 测试 方程有效
         task1 = SchedulerTask(
