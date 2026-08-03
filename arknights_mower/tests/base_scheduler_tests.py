@@ -597,6 +597,41 @@ class TestBaseScheduler(unittest.TestCase):
             any(task.type == TaskTypes.SELF_CORRECTION for task in solver.tasks)
         )
 
+    @patch.object(BaseSchedulerSolver, "__init__", lambda x: None)
+    def test_plan_solver_leaves_pending_mastery_to_mastery_sync(self):
+        solver = BaseSchedulerSolver()
+        solver.op_data = MagicMock()
+        solver.op_data.operators = {}
+        solver.op_data.print.return_value = ""
+        solver.tasks = []
+        solver.find_next_task = MagicMock(return_value=None)
+        solver.plan_metadata = MagicMock()
+        solver.resting = MagicMock(return_value={})
+        solver.agent_get_mood = MagicMock(return_value="noop")
+        solver.backup_plan_solver = MagicMock()
+
+        with (
+            patch.object(base_schedule, "try_reorder", return_value={}),
+            patch.object(base_schedule, "try_workshop_tasks"),
+            patch.object(base_schedule, "try_add_release_dorm"),
+            patch(
+                "arknights_mower.utils.mastery_db.get_pending_plans",
+                return_value=[{"char_id": "char_test", "skill_index": 1}],
+            ) as mock_get_pending,
+            patch(
+                "arknights_mower.utils.mastery_db.has_in_progress_plan",
+                return_value=False,
+            ) as mock_has_in_progress,
+        ):
+            solver.plan_solver()
+
+        self.assertFalse(
+            any(task.type == TaskTypes.SKILL_UPGRADE for task in solver.tasks)
+        )
+        mock_get_pending.assert_not_called()
+        mock_has_in_progress.assert_not_called()
+        solver.backup_plan_solver.assert_not_called()
+
 
 class TestSchedulerStability(unittest.TestCase):
     def _make_fia_solver(self, grouped):
