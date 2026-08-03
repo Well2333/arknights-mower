@@ -223,3 +223,6 @@ MAA
 # opencode
 .opencode/
 openspec/
+
+# Local private development memory
+/.local-memory/

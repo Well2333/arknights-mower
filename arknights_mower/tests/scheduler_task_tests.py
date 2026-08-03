@@ -1,8 +1,13 @@
 import unittest
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
 
-from arknights_mower.utils.operators import Dormitory, Operator, Operators
+from arknights_mower.utils.operators import (
+    Dormitory,
+    Operator,
+    Operators,
+    reconcile_saved_dormitories,
+)
 from arknights_mower.utils.plan import Plan, PlanConfig, Room
 from arknights_mower.utils.scheduler_task import (
     SchedulerTask,
@@ -14,6 +19,7 @@ from arknights_mower.utils.scheduler_task import (
     estimate_mood_ready_at,
     find_next_task,
     plan_metadata,
+    parse_scheduler_task_time,
     sanitize_self_correction_plan,
     shift_on_readiness_retry_names,
     scheduling,
@@ -26,6 +32,60 @@ with patch.dict("sys.modules", {"save_action_to_sqlite_decorator": MagicMock()})
 
 
 class TestScheduling(unittest.TestCase):
+    def test_parse_scheduler_task_time_respects_existing_offset(self):
+        china = timezone(timedelta(hours=8))
+
+        local_value = parse_scheduler_task_time(
+            "2026-08-02T22:30:00.000000+08:00", china
+        )
+        utc_value = parse_scheduler_task_time(
+            "2026-08-02T14:30:00.000000+00:00", china
+        )
+
+        expected = datetime(2026, 8, 2, 22, 30)
+        self.assertEqual(local_value, expected)
+        self.assertEqual(utc_value, expected)
+
+    def test_restore_dorms_keeps_current_plan_slots_and_recovers_new_occupants(self):
+        old_time = datetime(2026, 8, 3, 7, 30)
+        planned = [
+            Dormitory(("dormitory_1", 3)),
+            Dormitory(("dormitory_1", 4)),
+            Dormitory(("dormitory_4", 2)),
+        ]
+        saved = [
+            Dormitory(("dormitory_1", 4), "灰烬", old_time),
+            Dormitory(("dormitory_2", 2), "已移除床位", old_time),
+        ]
+        operators = {
+            "凯尔希": Operator(
+                "凯尔希",
+                "room_2_2",
+                current_room="dormitory_1",
+                current_index=3,
+            ),
+            "灰烬": Operator(
+                "灰烬",
+                "room_2_2",
+                current_room="dormitory_1",
+                current_index=4,
+            ),
+            "阿罗玛": Operator(
+                "阿罗玛",
+                "room_1_3",
+                current_room="dormitory_4",
+                current_index=2,
+            ),
+        }
+
+        result = reconcile_saved_dormitories(planned, saved, operators)
+
+        self.assertEqual(len(result), 3)
+        self.assertEqual([dorm.name for dorm in result], ["凯尔希", "灰烬", "阿罗玛"])
+        self.assertIsNone(result[0].time)
+        self.assertEqual(result[1].time, old_time)
+        self.assertIsNone(result[2].time)
+
     def test_adjust_two_orders(self):
         # 测试两个跑单任务被拉开
         task1 = SchedulerTask(
@@ -599,6 +659,25 @@ class TestShiftOnSafety(unittest.TestCase):
         self.assertEqual(sanitized["central"], ["Current", "Wrong"])
         self.assertNotIn("room_1_2", sanitized)
         self.assertEqual(sanitized["dormitory_1"], ["Current", "Resting"])
+
+    def test_sanitize_self_correction_removes_noop_work_room(self):
+        plan = {
+            "room_1_2": ["Current", "Ulpianus", "Andreana"],
+            "central": ["Wrong", "Current"],
+        }
+        current_by_room = {
+            "room_1_2": ["Proviso", "Ulpianus", "Andreana"],
+            "central": ["CurrentOperator", "Other"],
+        }
+
+        sanitized = sanitize_self_correction_plan(
+            plan,
+            set(),
+            current_by_room,
+        )
+
+        self.assertNotIn("room_1_2", sanitized)
+        self.assertEqual(sanitized["central"], ["Wrong", "Current"])
 
     def test_plan_metadata_clamps_group_to_latest_safe_mood_time(self):
         now = datetime.now()

@@ -388,11 +388,17 @@ class BaseMixin:
                 if pos := self.find("control_central"):
                     _room = segment.base(self.recog.img, pos)[room]
                     self.tap(self.adjust_room(_room))
+                    if (
+                        self.find("control_central") is None
+                        and self.detect_room() == room
+                    ):
+                        return
                 elif self.detect_room() == room:
                     return
                 else:
                     self.sleep()
-            if not pos:
+            if enter_times < 2:
+                self.back_to_index()
                 self.back_to_infrastructure()
         raise Exception("未成功进入房间")
 
@@ -427,6 +433,8 @@ class BaseMixin:
         dilation = cv2.dilate(img, kernel, iterations=1)
         contours, _ = cv2.findContours(dilation, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
         rect = [cv2.boundingRect(c) for c in contours]
+        if not rect:
+            return ""
         x0 = min(x for x, y, w, h in rect)
         y0 = min(y for x, y, w, h in rect)
         x1 = max(x + w for x, y, w, h in rect)

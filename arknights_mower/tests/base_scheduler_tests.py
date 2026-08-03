@@ -328,6 +328,38 @@ class TestBaseScheduler(unittest.TestCase):
         solver.tap_element.assert_not_called()
 
     @patch.object(BaseSchedulerSolver, "__init__", lambda x: None)
+    def test_accept_order_reuses_successful_detection_for_save_and_tap(self):
+        solver = BaseSchedulerSolver()
+        solver.recog = MagicMock(w=1920, h=1080)
+        solver.order_reader = MagicMock()
+        solver.find = MagicMock(side_effect=[(500, 675), None])
+        solver.tap = MagicMock()
+
+        solver.accept_order()
+
+        self.assertEqual(solver.find.call_count, 2)
+        solver.recog.save_screencap.assert_called_once_with("run_order")
+        solver.order_reader.save.assert_called_once_with(solver.recog.img)
+        solver.tap.assert_called_once_with((480.0, 270.0), interval=0.5)
+
+    @patch.object(BaseSchedulerSolver, "__init__", lambda x: None)
+    def test_accept_order_timeout_does_not_save_or_tap(self):
+        solver = BaseSchedulerSolver()
+        solver.recog = MagicMock(w=1920, h=1080)
+        solver.order_reader = MagicMock()
+        solver.find = MagicMock(return_value=None)
+        solver.tap = MagicMock()
+        solver.sleep = MagicMock()
+
+        solver.accept_order()
+
+        self.assertEqual(solver.find.call_count, 8)
+        self.assertEqual(solver.recog.update.call_count, 7)
+        solver.recog.save_screencap.assert_not_called()
+        solver.order_reader.save.assert_not_called()
+        solver.tap.assert_not_called()
+
+    @patch.object(BaseSchedulerSolver, "__init__", lambda x: None)
     def test_run_order_with_next_order_timer_collects_and_replans(self):
         solver = BaseSchedulerSolver()
         solver.task = SchedulerTask(task_type=TaskTypes.RUN_ORDER)

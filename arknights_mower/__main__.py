@@ -140,7 +140,13 @@ def simulate(saved, restart_after_mood_read=False):
                 base_scheduler.op_data.operators[k].depletion_rate = v.depletion_rate
                 base_scheduler.op_data.operators[k].current_room = v.current_room
                 base_scheduler.op_data.operators[k].current_index = v.current_index
-            base_scheduler.op_data.dorm = saved["dorm"]
+            from arknights_mower.utils.operators import reconcile_saved_dormitories
+
+            base_scheduler.op_data.dorm = reconcile_saved_dormitories(
+                base_scheduler.op_data.dorm,
+                saved["dorm"],
+                base_scheduler.op_data.operators,
+            )
             base_scheduler.party_time = saved["party_time"]
             base_scheduler.daily_visit_friend = saved["daily_visit_friend"]
             base_scheduler.daily_report = saved["daily_report"]

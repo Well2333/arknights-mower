@@ -9,7 +9,6 @@ from functools import wraps
 from io import BytesIO
 from threading import RLock, Thread
 
-import pytz
 from flask import Flask, abort, request, send_file, send_from_directory
 from flask_cors import CORS
 from flask_sock import Sock
@@ -1127,7 +1126,11 @@ def cultivate_fetch():
 def add_task():
     from arknights_mower.__main__ import base_scheduler
     from arknights_mower.utils.mastery_db import get_route, has_train_group_plan
-    from arknights_mower.utils.scheduler_task import SchedulerTask, TaskTypes
+    from arknights_mower.utils.scheduler_task import (
+        SchedulerTask,
+        TaskTypes,
+        parse_scheduler_task_time,
+    )
 
     if request.method == "POST":
         try:
@@ -1138,13 +1141,8 @@ def add_task():
                 # if not base_scheduler.sleeping:
                 #     raise Exception("只能在休息时间添加")
                 if task:
-                    utc_time = datetime.datetime.strptime(
-                        task["time"], "%Y-%m-%dT%H:%M:%S.%f%z"
-                    )
-                    task_time = (
-                        utc_time.replace(tzinfo=pytz.utc)
-                        .astimezone(get_localzone())
-                        .replace(tzinfo=None)
+                    task_time = parse_scheduler_task_time(
+                        task["time"], get_localzone()
                     )
                     new_task = SchedulerTask(
                         time=task_time,
@@ -1196,6 +1194,8 @@ def add_task():
                         base_scheduler.op_data.skill_upgrade_supports = supports
                         logger.info(f"从数据库加载 {prof_cn} 专精路线完毕")
                     base_scheduler.tasks.append(new_task)
+                    base_scheduler.tasks.sort(key=lambda item: item.time)
+                    config.wake_mower.set()
                     logger.debug(f"成功：{str(new_task)}")
                     return "添加任务成功！"
             raise Exception("添加任务失败！！请确保Mower正在运行")

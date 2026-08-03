@@ -977,8 +977,15 @@ class BaseSchedulerSolver(SceneGraphSolver, BaseMixin):
                     or (operator.group and operator.current_room == "")
                 )
             }
+            current_by_room = {
+                room: self.op_data.get_current_room(room, True)
+                for room in fix_plan
+                if not room.startswith("dormitory")
+            }
             fix_plan = sanitize_self_correction_plan(
-                fix_plan, protected_high_names
+                fix_plan,
+                protected_high_names,
+                current_by_room,
             )
             if len(fix_plan.keys()) > 0:
                 # 如果5分钟之内有任务则跳过心情读取
@@ -3894,19 +3901,27 @@ class BaseSchedulerSolver(SceneGraphSolver, BaseMixin):
     def accept_order(self):
         wait = 0
         # 等待订单完成
-        while self.find("order_ready", scope=((450, 675), (600, 750))) is None:
+        order_ready = self.find("order_ready", scope=((450, 675), (600, 750)))
+        while order_ready is None:
             if wait > 6:
-                break
+                logger.warning("等待订单完成超时，未检测到可领取订单")
+                return
             self.recog.update()
             self.sleep(0.5)
             wait += 1
-        not_take = True
-        while self.find("order_ready", scope=((450, 675), (600, 750))) is not None:
-            if not_take:
-                self.recog.save_screencap("run_order")
-                self.order_reader.save(self.recog.img)
-                not_take = False
+            order_ready = self.find(
+                "order_ready", scope=((450, 675), (600, 750))
+            )
+
+        # 复用已成功识别的画面。特征匹配包含随机采样，在同一帧上立即重复
+        # 识别也可能得到不同结果；若第二次误判为空，会跳过订单记录和领取。
+        self.recog.save_screencap("run_order")
+        self.order_reader.save(self.recog.img)
+        while order_ready is not None:
             self.tap((self.recog.w * 0.25, self.recog.h * 0.25), interval=0.5)
+            order_ready = self.find(
+                "order_ready", scope=((450, 675), (600, 750))
+            )
 
     def agent_arrange(self, plan: tp.BasePlan, get_time=False):
         logger.info("基建：排班")

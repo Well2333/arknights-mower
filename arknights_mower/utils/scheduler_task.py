@@ -30,6 +30,12 @@ def calculate_shift_on_mood(
     return max(lower_limit, min(target, upper_limit))
 
 
+def parse_scheduler_task_time(value, local_timezone):
+    """将带时区的 WebUI 时间转换为调度器使用的本地无时区时间。"""
+    aware_time = datetime.strptime(value, "%Y-%m-%dT%H:%M:%S.%f%z")
+    return aware_time.astimezone(local_timezone).replace(tzinfo=None)
+
+
 def estimate_mood_ready_at(
     now,
     observed_at,
@@ -141,9 +147,14 @@ def schedule_shift_on_readiness_retry(tasks, operators, now, existing_time=None)
     tasks.sort(key=lambda item: item.time)
 
 
-def sanitize_self_correction_plan(plan, resting_high_names):
-    """确保纠错任务不会把正在宿舍或位置未知的高效干员拉回工作区。"""
+def sanitize_self_correction_plan(
+    plan,
+    resting_high_names,
+    current_by_room=None,
+):
+    """保护休息主力，并删除清洗后已与现场一致的工作房间。"""
     sanitized = copy.deepcopy(plan)
+    current_by_room = current_by_room or {}
     for room in list(sanitized):
         if room.startswith("dormitory"):
             continue
@@ -151,6 +162,12 @@ def sanitize_self_correction_plan(plan, resting_high_names):
             "Current" if name in resting_high_names else name
             for name in sanitized[room]
         ]
+        current = current_by_room.get(room)
+        if current is not None and len(current) == len(sanitized[room]):
+            sanitized[room] = [
+                "Current" if name == current[idx] else name
+                for idx, name in enumerate(sanitized[room])
+            ]
         if all(name == "Current" for name in sanitized[room]):
             del sanitized[room]
     return sanitized
