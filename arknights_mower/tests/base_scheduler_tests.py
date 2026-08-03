@@ -399,6 +399,55 @@ class TestBaseScheduler(unittest.TestCase):
         solver.reset_room_time.assert_called_once_with("room_1_1")
 
     @patch.object(BaseSchedulerSolver, "__init__", lambda x: None)
+    def test_immediate_run_order_long_timer_reaches_arrangement(self):
+        solver = BaseSchedulerSolver()
+        solver.task = SchedulerTask(
+            task_type=TaskTypes.RUN_ORDER,
+            immediate=True,
+            meta_data="room_1_1",
+        )
+        solver.op_data = MagicMock()
+        solver.op_data.run_order_rooms = {"room_1_1": []}
+        solver.op_data.get_current_room.return_value = ["CurrentAgent"]
+        solver.turn_on_room_detail = MagicMock()
+        solver.get_order_remaining_time = MagicMock(return_value=1088)
+        solver.back = MagicMock()
+        solver.accept_order = MagicMock()
+        solver.reset_room_time = MagicMock()
+        solver.find = MagicMock(return_value=(100, 100))
+        solver.choose_agent = MagicMock()
+        solver.tap_confirm = MagicMock()
+        solver.get_agent_from_room = MagicMock(
+            return_value=[{"agent": "RunOrderAgent"}]
+        )
+        solver.scene = MagicMock(return_value=Scene.INFRA_MAIN)
+        solver.waiting_scene = set()
+
+        with (
+            patch.object(
+                base_schedule.config.conf.run_order_grandet_mode,
+                "buffer_time",
+                180,
+            ),
+            patch.object(base_schedule.config.conf, "run_order_delay", 8),
+            patch.object(base_schedule, "send_message") as mock_send_message,
+        ):
+            result = solver.agent_arrange_room(
+                {"room_1_1": ["CurrentAgent"]},
+                "room_1_1",
+                {"room_1_1": ["RunOrderAgent"]},
+                skip_enter=True,
+            )
+
+        self.assertEqual(result, {"room_1_1": ["CurrentAgent"]})
+        solver.choose_agent.assert_called_once_with(
+            ["RunOrderAgent"], "room_1_1", True
+        )
+        solver.accept_order.assert_not_called()
+        solver.reset_room_time.assert_not_called()
+        mock_send_message.assert_not_called()
+
+    @patch.object(BaseSchedulerSolver, "__init__", lambda x: None)
     def test_immediate_run_order_forces_drone_for_trade_room(self):
         solver = BaseSchedulerSolver()
         solver.task = SchedulerTask(

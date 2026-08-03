@@ -3794,19 +3794,24 @@ class BaseSchedulerSolver(SceneGraphSolver, BaseMixin):
                         and choose_error <= 0
                     ):
                         remaining_time = self.get_order_remaining_time()
-                        if 0 < remaining_time < (config.conf.run_order_delay + 10) * 60:
-                            if config.conf.run_order_buffer_time > 0:
-                                if getattr(self.task, "immediate", False):
-                                    logger.info("立即跑单：保留当前执行时间，跳过跑单等待")
-                                else:
-                                    self.task.time = (
-                                        datetime.now()
-                                        + timedelta(seconds=remaining_time)
-                                        - timedelta(minutes=config.conf.run_order_delay)
-                                    )
-                                    logger.info(f"订单倒计时 {remaining_time}秒")
-                                self.back()
-                                self.turn_on_room_detail(room)
+                        if getattr(self.task, "immediate", False):
+                            logger.info(
+                                f"立即跑单：订单倒计时 {remaining_time}秒，"
+                                "跳过普通跑单窗口判断"
+                            )
+                            self.back()
+                            self.turn_on_room_detail(room)
+                        elif 0 < remaining_time < (
+                            config.conf.run_order_delay + 10
+                        ) * 60:
+                            self.task.time = (
+                                datetime.now()
+                                + timedelta(seconds=remaining_time)
+                                - timedelta(minutes=config.conf.run_order_delay)
+                            )
+                            logger.info(f"订单倒计时 {remaining_time}秒")
+                            self.back()
+                            self.turn_on_room_detail(room)
                         elif self.task.adjusted:
                             self.back()
                             self.turn_on_room_detail(room)
