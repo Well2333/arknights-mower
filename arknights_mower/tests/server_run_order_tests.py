@@ -105,5 +105,92 @@ class TestImmediateRunOrderEndpoint(unittest.TestCase):
         self.assertFalse(config.wake_mower.is_set())
 
 
+class TestDormOrderProtection(unittest.TestCase):
+    def setUp(self):
+        self.previous_conf = config.conf
+        self.previous_plan = config.plan
+        self.previous_token = getattr(server.app, "token", None)
+        server.app.token = "test-token"
+        self.client = server.app.test_client()
+
+    def tearDown(self):
+        config.conf = self.previous_conf
+        config.plan = self.previous_plan
+        if self.previous_token is None:
+            delattr(server.app, "token")
+        else:
+            server.app.token = self.previous_token
+
+    @staticmethod
+    def make_plan(second_room_free=True):
+        dormitory_2 = {
+            "name": "dormitory_2",
+            "plans": [{"agent": "Free" if second_room_free else "Resident"}],
+        }
+        return config.PlanModel(
+            plan1={
+                "dormitory_1": {
+                    "name": "dormitory_1",
+                    "plans": [
+                        {"agent": "Manager"},
+                        {"agent": "Free"},
+                        {"agent": "Free"},
+                    ],
+                },
+                "dormitory_2": dormitory_2,
+            }
+        )
+
+    def test_valid_custom_order_is_preserved(self):
+        plan = self.make_plan()
+        requested = "dormitory_1_2,dormitory_2_0,dormitory_1_1"
+
+        self.assertEqual(
+            server._reconcile_dorm_order(plan, requested),
+            requested,
+        )
+
+    def test_empty_conf_post_rebuilds_order_from_current_plan(self):
+        config.plan = self.make_plan()
+        config.conf.dorm_order = (
+            "dormitory_1_2,dormitory_2_0,dormitory_1_1"
+        )
+        payload = config.conf.model_dump()
+        payload["dorm_order"] = ""
+
+        with patch.object(config, "save_conf"):
+            response = self.client.post(
+                "/conf",
+                json=payload,
+                headers={"token": "test-token"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            config.conf.dorm_order,
+            "dormitory_1_2,dormitory_2_0,dormitory_1_1",
+        )
+
+    def test_plan_topology_change_rebuilds_stale_order(self):
+        config.plan = self.make_plan()
+        config.conf.dorm_order = (
+            "dormitory_1_1,dormitory_2_0,dormitory_1_2"
+        )
+        new_plan = self.make_plan(second_room_free=False)
+
+        with (
+            patch.object(config, "save_plan") as save_plan,
+            patch.object(config, "save_conf") as save_conf,
+        ):
+            server._save_plan_with_dorm_order(new_plan)
+
+        self.assertEqual(
+            config.conf.dorm_order,
+            "dormitory_1_1,dormitory_1_2",
+        )
+        save_plan.assert_called_once()
+        save_conf.assert_called_once()
+
+
 if __name__ == "__main__":
     unittest.main()

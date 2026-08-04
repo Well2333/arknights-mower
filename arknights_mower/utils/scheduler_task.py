@@ -900,7 +900,7 @@ def try_add_release_dorm(plan, time, op_data, tasks):
                         break
                     agent = op_data.operators[value.name]
                     logger.debug(str(value))
-                    if not v.is_high() and (
+                    if not agent.is_high() and (
                         agent.current_mood() >= agent.upper_limit
                         or (value.time is not None and value.time < datetime.now())
                     ):

@@ -27,6 +27,7 @@ from arknights_mower.utils.scheduler_task import (
     shift_on_readiness_retry_names,
     scheduling,
     shift_on_not_before,
+    try_add_release_dorm,
     try_reorder,
 )
 
@@ -927,3 +928,95 @@ class TestShiftOnSafety(unittest.TestCase):
                     set(shift_on_readiness_retry_names(retries[0].meta_data)),
                     set(names),
                 )
+
+
+class TestReleaseDormHardening(unittest.TestCase):
+    def test_expired_low_priority_bed_uses_resident_type_not_stale_loop_value(self):
+        resident = Operator(
+            "Resident",
+            "",
+            current_room="dormitory_1",
+            current_index=0,
+            mood=24,
+            upper_limit=24,
+            operator_type="low",
+        )
+        waiting = Operator(
+            "Waiting",
+            "",
+            current_room="",
+            mood=6,
+            upper_limit=24,
+            lower_limit=0,
+            operator_type="low",
+        )
+        high_last = Operator(
+            "HighLast",
+            "central",
+            current_room="central",
+            mood=20,
+            operator_type="high",
+        )
+        op_data = MagicMock()
+        op_data.config.free_room = True
+        op_data.config.free_blacklist = []
+        op_data.operators = {
+            "Resident": resident,
+            "Waiting": waiting,
+            "HighLast": high_last,
+        }
+        op_data.dorm = [
+            Dormitory(
+                ("dormitory_1", 0),
+                "Resident",
+                datetime.now() - timedelta(minutes=1),
+            )
+        ]
+        tasks = []
+
+        try_add_release_dorm({}, None, op_data, tasks)
+
+        self.assertEqual(len(tasks), 1)
+        self.assertEqual(
+            tasks[0].plan,
+            {"dormitory_1": ["Waiting", "Current", "Current", "Current", "Current"]},
+        )
+
+    def test_expired_high_priority_resident_is_not_released(self):
+        resident = Operator(
+            "Resident",
+            "central",
+            current_room="dormitory_1",
+            current_index=0,
+            mood=24,
+            upper_limit=24,
+            operator_type="high",
+        )
+        waiting = Operator(
+            "Waiting",
+            "",
+            current_room="",
+            mood=6,
+            upper_limit=24,
+            lower_limit=0,
+            operator_type="low",
+        )
+        op_data = MagicMock()
+        op_data.config.free_room = True
+        op_data.config.free_blacklist = []
+        op_data.operators = {
+            "Resident": resident,
+            "Waiting": waiting,
+        }
+        op_data.dorm = [
+            Dormitory(
+                ("dormitory_1", 0),
+                "Resident",
+                datetime.now() - timedelta(minutes=1),
+            )
+        ]
+        tasks = []
+
+        try_add_release_dorm({}, None, op_data, tasks)
+
+        self.assertEqual(tasks, [])

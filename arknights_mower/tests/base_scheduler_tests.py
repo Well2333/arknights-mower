@@ -891,5 +891,313 @@ class TestSchedulerStability(unittest.TestCase):
         self.assertIsNone(result)
         self.assertEqual(solver.tasks, [])
 
+class TestMasteryAndDroneHardening(unittest.TestCase):
+    def test_mastery_sync_twice_keeps_one_refresh_and_local_expiry(self):
+        from arknights_mower.utils import mastery_sync
+        from arknights_mower.utils.mastery_sync import MasterySync
+
+        scheduler = MagicMock()
+        scheduler.tasks = []
+        plan = {
+            "char_id": "char_test",
+            "skill_index": 1,
+            "status": "in_progress",
+            "level": 1,
+            "expires_at": "2026-08-03 00:00:00",
+        }
+        player_info_module = MagicMock()
+        player_info_module.player_info_cache = {
+            "latest": {
+                "building_training": {
+                    "remainSecs": 7200,
+                    "slotState": 1,
+                    "trainee": {"charId": "char_test"},
+                }
+            }
+        }
+
+        with (
+            patch.object(MasterySync, "_refresh_skland_data"),
+            patch.object(mastery_sync, "has_train_group_plan", return_value=False),
+            patch.object(mastery_sync, "get_in_progress_plan", return_value=plan),
+            patch.object(mastery_sync, "set_plan_status") as set_status,
+            patch.object(mastery_sync._os.path, "exists", return_value=False),
+            patch.dict(
+                "sys.modules",
+                {"arknights_mower.solvers.player_info": player_info_module},
+            ),
+        ):
+            sync = MasterySync(scheduler)
+            sync.sync_and_schedule()
+            first_refresh = scheduler.tasks[0]
+            sync.sync_and_schedule()
+
+        refresh_tasks = [
+            task
+            for task in scheduler.tasks
+            if task.type == TaskTypes.REFRESH_TIME and task.meta_data == "train"
+        ]
+        self.assertEqual(refresh_tasks, [first_refresh])
+        self.assertGreater(
+            first_refresh.time,
+            datetime.now() + timedelta(hours=1, minutes=59),
+        )
+        self.assertLess(
+            first_refresh.time,
+            datetime.now() + timedelta(hours=2, minutes=1),
+        )
+        saved_expiry = datetime.fromisoformat(set_status.call_args.kwargs["expires_at"])
+        self.assertGreater(saved_expiry, datetime.now() + timedelta(hours=1, minutes=59))
+        self.assertLess(saved_expiry, datetime.now() + timedelta(hours=2, minutes=1))
+
+    @patch.object(BaseSchedulerSolver, "__init__", lambda x: None)
+    def test_training_refresh_keeps_one_future_completion_trigger(self):
+        solver = BaseSchedulerSolver()
+        current = SchedulerTask(
+            task_type=TaskTypes.REFRESH_TIME,
+            meta_data="train",
+        )
+        solver.task = current
+        solver.tasks = [current]
+        solver.op_data = MagicMock()
+        solver.op_data.skill_upgrade_supports = []
+        player_info_module = MagicMock()
+        player_info_module.player_info_cache = {
+            "latest": {"building_training": {"trainer": {"charId": "char_optimal"}}}
+        }
+        completion_time = datetime.now() + timedelta(hours=6)
+
+        with (
+            patch.dict(
+                "sys.modules",
+                {"arknights_mower.solvers.player_info": player_info_module},
+            ),
+            patch(
+                "arknights_mower.utils.mastery_recommendation.get_skill_data",
+                return_value={
+                    "characters": {"char_optimal": {"name": "逻各斯"}}
+                },
+            ),
+        ):
+            solver._calculate_swap_from_api(completion_time)
+            future_refresh = solver.tasks[1]
+            solver._calculate_swap_from_api(completion_time)
+
+        self.assertEqual(len(solver.tasks), 2)
+        self.assertIs(solver.tasks[1], future_refresh)
+        self.assertEqual(future_refresh.type, TaskTypes.REFRESH_TIME)
+        self.assertEqual(future_refresh.meta_data, "train")
+        self.assertEqual(future_refresh.time, completion_time)
+
+    @patch.object(BaseSchedulerSolver, "__init__", lambda x: None)
+    def test_training_refresh_exception_keeps_completion_fallback(self):
+        solver = BaseSchedulerSolver()
+        current = SchedulerTask(
+            task_type=TaskTypes.REFRESH_TIME,
+            meta_data="train",
+        )
+        solver.task = current
+        solver.tasks = [current]
+        completion_time = datetime.now() + timedelta(hours=5)
+        player_info_module = MagicMock()
+        player_info_module.player_info_cache = {
+            "latest": {"building_training": {"trainer": {}}}
+        }
+
+        with (
+            patch.dict(
+                "sys.modules",
+                {"arknights_mower.solvers.player_info": player_info_module},
+            ),
+            patch(
+                "arknights_mower.utils.mastery_db.get_in_progress_plan",
+                return_value={
+                    "char_id": "char_test",
+                    "skill_index": 1,
+                },
+            ),
+        ):
+            solver._calculate_swap_from_api(completion_time)
+
+        self.assertEqual(len(solver.tasks), 2)
+        self.assertEqual(solver.tasks[1].type, TaskTypes.REFRESH_TIME)
+        self.assertEqual(solver.tasks[1].meta_data, "train")
+        self.assertEqual(solver.tasks[1].time, completion_time)
+
+    @patch.object(BaseSchedulerSolver, "__init__", lambda x: None)
+    def test_mastery_swap_and_refresh_follow_changed_eta(self):
+        solver = BaseSchedulerSolver()
+        current = SchedulerTask(
+            task_type=TaskTypes.REFRESH_TIME,
+            meta_data="train",
+        )
+        solver.task = current
+        solver.tasks = [current]
+        support = MagicMock()
+        support.name = "Trainer"
+        support.swap_name = "Swap"
+        solver.op_data = MagicMock()
+        solver.op_data.skill_upgrade_supports = [support]
+        solver.op_data.calculate_switch_time.side_effect = [2, 4]
+        player_info_module = MagicMock()
+        player_info_module.player_info_cache = {
+            "latest": {
+                "building_training": {
+                    "trainer": {"charId": "char_trainer"},
+                }
+            }
+        }
+        first_completion = datetime.now() + timedelta(hours=8)
+        second_completion = first_completion + timedelta(hours=1)
+
+        with (
+            patch.dict(
+                "sys.modules",
+                {"arknights_mower.solvers.player_info": player_info_module},
+            ),
+            patch(
+                "arknights_mower.utils.mastery_db.get_in_progress_plan",
+                return_value={
+                    "char_id": "char_test",
+                    "skill_index": 1,
+                },
+            ),
+            patch(
+                "arknights_mower.utils.mastery_recommendation.get_skill_data",
+                return_value={
+                    "characters": {"char_trainer": {"name": "Trainer"}}
+                },
+            ),
+        ):
+            solver._calculate_swap_from_api(first_completion)
+            swap_task = next(
+                task for task in solver.tasks if task.meta_data == "_mastery"
+            )
+            first_swap_time = swap_task.time
+            solver._calculate_swap_from_api(second_completion)
+
+        swap_tasks = [
+            task for task in solver.tasks if task.meta_data == "_mastery"
+        ]
+        refresh_tasks = [
+            task
+            for task in solver.tasks
+            if task is not current
+            and task.type == TaskTypes.REFRESH_TIME
+            and task.meta_data == "train"
+        ]
+        self.assertEqual(swap_tasks, [swap_task])
+        self.assertGreater(swap_task.time, first_swap_time)
+        self.assertEqual(
+            getattr(swap_task, "mastery_plan_key"),
+            "char_test_1",
+        )
+        self.assertEqual(len(refresh_tasks), 1)
+        self.assertEqual(
+            refresh_tasks[0].time,
+            swap_task.time + timedelta(seconds=1),
+        )
+
+    @patch.object(BaseSchedulerSolver, "__init__", lambda x: None)
+    def test_training_completion_brings_existing_next_level_task_due(self):
+        solver = BaseSchedulerSolver()
+        solver.task = SchedulerTask(
+            task_type=TaskTypes.REFRESH_TIME,
+            meta_data="train",
+        )
+        first = SchedulerTask(
+            time=datetime.now() + timedelta(hours=3),
+            task_type=TaskTypes.SKILL_UPGRADE,
+            meta_data="old",
+        )
+        first.plan_key = "char_test_2"
+        duplicate = SchedulerTask(
+            time=datetime.now() + timedelta(hours=4),
+            task_type=TaskTypes.SKILL_UPGRADE,
+            meta_data="duplicate",
+        )
+        duplicate.plan_key = "char_test_2"
+        solver.tasks = [solver.task, first, duplicate]
+        player_info_module = MagicMock()
+        player_info_module.player_info_cache = {
+            "latest": {
+                "building_training": {
+                    "trainee": {
+                        "charId": "char_test",
+                        "targetSkill": -1,
+                    }
+                }
+            }
+        }
+        before = datetime.now()
+
+        with (
+            patch.dict(
+                "sys.modules",
+                {"arknights_mower.solvers.player_info": player_info_module},
+            ),
+            patch(
+                "arknights_mower.utils.mastery_db.get_in_progress_plan",
+                return_value={
+                    "char_id": "char_test",
+                    "skill_index": 2,
+                    "level": 1,
+                },
+            ),
+            patch(
+                "arknights_mower.utils.mastery_db.insert_plan"
+            ) as insert_plan,
+            patch(
+                "arknights_mower.utils.mastery_recommendation.get_skill_data",
+                return_value={
+                    "characters": {"char_test": {"name": "Test"}}
+                },
+            ),
+        ):
+            solver._handle_training_complete()
+
+        next_tasks = [
+            task
+            for task in solver.tasks
+            if task.type == TaskTypes.SKILL_UPGRADE
+            and getattr(task, "plan_key", "") == "char_test_2"
+        ]
+        self.assertEqual(next_tasks, [first])
+        self.assertGreaterEqual(first.time, before)
+        self.assertLessEqual(first.time, datetime.now())
+        self.assertEqual(first.meta_data, "Test 技能3")
+        self.assertEqual(insert_plan.call_count, 2)
+
+    @patch.object(BaseSchedulerSolver, "__init__", lambda x: None)
+    def test_immediate_trade_drone_checks_limit_before_first_acceleration(self):
+        solver = BaseSchedulerSolver()
+        solver.tasks = []
+        solver.task = SchedulerTask()
+        solver.op_data = MagicMock()
+        solver.op_data.run_order_rooms = {"room_1_1": []}
+        solver.drone_room = None
+        solver.recog = MagicMock()
+        solver.digit_reader = MagicMock()
+        solver.digit_reader.get_drone.return_value = 113
+        solver.waiting_scene = set()
+        solver.enter_room = MagicMock()
+        solver.tap = MagicMock()
+        solver.tap_element = MagicMock()
+        solver.accept_order = MagicMock()
+        solver.scene_graph_navigation = MagicMock()
+        bill_accelerate = object()
+        solver.find = MagicMock(
+            side_effect=lambda name, *args, **kwargs: (
+                bill_accelerate if name == "bill_accelerate" else None
+            )
+        )
+
+        with patch.object(base_schedule.config.conf, "drone_count_limit", 120):
+            solver.drone("room_1_1", not_customize=True)
+
+        solver.digit_reader.get_drone.assert_called_once()
+        solver.tap_element.assert_not_called()
+        solver.accept_order.assert_not_called()
+
 if __name__ == "__main__":
     unittest.main()

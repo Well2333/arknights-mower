@@ -150,6 +150,60 @@ def not_found(e):
     return send_from_directory("ui/dist", "index.html")
 
 
+def _free_dorm_positions(plan):
+    """Return dynamic dorm beds in the same stable order used by Operators."""
+    first_free = []
+    remaining_free = []
+    for room_name in (
+        "dormitory_1",
+        "dormitory_2",
+        "dormitory_3",
+        "dormitory_4",
+    ):
+        facility = getattr(plan.plan1, room_name, None)
+        if facility is None:
+            continue
+        positions = [
+            f"{room_name}_{idx}"
+            for idx, slot in enumerate(facility.plans)
+            if slot.agent == "Free"
+        ]
+        if positions:
+            first_free.append(positions[0])
+            remaining_free.extend(positions[1:])
+    return first_free + remaining_free
+
+
+def _reconcile_dorm_order(plan, requested_order, fallback_order=""):
+    """Keep a valid requested/current order, otherwise rebuild from the plan."""
+    positions = _free_dorm_positions(plan)
+    for candidate in (requested_order, fallback_order):
+        requested = [
+            item.strip()
+            for item in (candidate or "").split(",")
+            if item.strip()
+        ]
+        if (
+            len(requested) == len(set(requested))
+            and set(requested) == set(positions)
+        ):
+            return ",".join(requested)
+    return ",".join(positions)
+
+
+def _save_plan_with_dorm_order(new_plan):
+    normalized = _reconcile_dorm_order(new_plan, config.conf.dorm_order)
+    changed = normalized != config.conf.dorm_order
+    config.plan = new_plan
+    config.save_plan()
+    if changed:
+        logger.warning(
+            "dorm_order did not match the saved plan topology; rebuilt safely"
+        )
+        config.conf.dorm_order = normalized
+        config.save_conf()
+
+
 @app.route("/conf", methods=["GET", "POST"])
 @require_token
 def load_config():
@@ -173,6 +227,17 @@ def load_config():
         req["maa_weekly_plan"] = [
             item.model_dump() for item in config.conf.maa_weekly_plan
         ]
+        requested_dorm_order = req.get("dorm_order", config.conf.dorm_order)
+        req["dorm_order"] = _reconcile_dorm_order(
+            config.plan,
+            requested_dorm_order,
+            config.conf.dorm_order,
+        )
+        if req["dorm_order"] != requested_dorm_order:
+            logger.warning(
+                "Rejected dorm_order that did not match the current plan topology; "
+                "using a safe order"
+            )
         config.conf = config.Conf(**req)
         config.save_conf()
         return "New config saved!"
@@ -184,8 +249,7 @@ def load_plan_from_json():
     if request.method == "GET":
         return config.plan.model_dump(exclude_none=True)
     else:
-        config.plan = config.PlanModel(**request.json)
-        config.save_plan()
+        _save_plan_with_dorm_order(config.PlanModel(**request.json))
         return "New plan saved。"
 
 
@@ -416,8 +480,7 @@ def import_from_image():
             logger.exception(msg)
             return msg
     if data:
-        config.plan = config.PlanModel(**data)
-        config.save_plan()
+        _save_plan_with_dorm_order(config.PlanModel(**data))
         return "排班已加载"
     else:
         return "排班表导入失败！"

@@ -4,12 +4,31 @@ from datetime import datetime
 
 import pandas as pd
 
-# from .log import logger
 from arknights_mower.data import key_mapping, workshop_formula
-
-# from typing import Dict, List, Union
 from arknights_mower.solvers.record import save_inventory_counts
+from arknights_mower.utils.log import logger
 from arknights_mower.utils.path import get_path
+
+
+def inventory_items_by_name(items):
+    """Map known inventory IDs and skip newly released unknown items safely."""
+    inventory = {}
+    unknown_ids = []
+    for item in items:
+        count = int(item["count"])
+        if count == 0:
+            continue
+        mapping = key_mapping.get(item["id"])
+        if mapping is None:
+            unknown_ids.append(item["id"])
+            continue
+        inventory[mapping[2]] = count
+    if unknown_ids:
+        logger.warning(
+            "仓库扫描跳过未收录道具，不中断其余库存保存: "
+            + ",".join(sorted(set(unknown_ids)))
+        )
+    return inventory
 
 
 def 读取仓库():
@@ -19,11 +38,7 @@ def 读取仓库():
     with open(path, "r", encoding="utf-8") as f:
         depotinfo = json.load(f)
     物品数量 = depotinfo["data"]["items"]
-    新物品1 = {
-        key_mapping[item["id"]][2]: int(item["count"])
-        for item in 物品数量
-        if int(item["count"]) != 0
-    }
+    新物品1 = inventory_items_by_name(物品数量)
 
     csv_path = get_path("@app/tmp/depotresult.csv")
     if not os.path.exists(csv_path):

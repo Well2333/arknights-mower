@@ -25,6 +25,32 @@ class MasterySync:
     def __init__(self, scheduler):
         self._scheduler = scheduler
 
+    def _ensure_single_train_refresh(self, refresh_time):
+        """Keep one queued training refresh without moving it back to now."""
+        refresh_tasks = [
+            task
+            for task in self._scheduler.tasks
+            if task.type == TaskTypes.REFRESH_TIME and task.meta_data == "train"
+        ]
+        if refresh_tasks:
+            keeper = min(refresh_tasks, key=lambda task: task.time)
+            for duplicate in refresh_tasks:
+                if duplicate is not keeper:
+                    self._scheduler.tasks.remove(duplicate)
+            logger.debug(
+                "MasterySync: training REFRESH_TIME already queued at "
+                f"{keeper.time}"
+            )
+            return keeper
+
+        task = SchedulerTask(
+            time=refresh_time,
+            task_type=TaskTypes.REFRESH_TIME,
+            meta_data="train",
+        )
+        self._scheduler.tasks.append(task)
+        return task
+
     def sync_and_schedule(self):
         if has_train_group_plan():
             logger.info("MasterySync: 训练室已配置小组，跳过自动调度")
@@ -51,11 +77,14 @@ class MasterySync:
                 slot_state = training.get("slotState", 0)
                 trainee_char_id = training["trainee"]["charId"]
 
-                # 训练已完成 → 跳过，由 refresh_skill_time 处理
+                # 训练已完成 → 只排一个立即刷新，由 refresh_skill_time 收口。
                 if remain_secs <= 0 or slot_state == 2:
                     logger.info(
-                        f"MasterySync: training complete (remainSecs={remain_secs} slotState={slot_state}), skip sync"
+                        f"MasterySync: training complete (remainSecs={remain_secs} "
+                        f"slotState={slot_state}), scheduling one refresh"
                     )
+                    self._ensure_single_train_refresh(datetime.now())
+                    return
                 elif trainee_char_id != plan["char_id"]:
                     logger.warning(
                         f"MasterySync: trainee mismatch ({trainee_char_id} != {plan['char_id']}), marking failed"
@@ -70,11 +99,7 @@ class MasterySync:
                 else:
                     # 更新 expires_at
                     expires_at_local = datetime.now() + timedelta(seconds=remain_secs)
-                    from datetime import timezone
-
-                    new_expires = (
-                        datetime.now(timezone.utc) + timedelta(seconds=remain_secs)
-                    ).strftime("%Y-%m-%d %H:%M:%S")
+                    new_expires = expires_at_local.strftime("%Y-%m-%d %H:%M:%S")
                     old_expires = plan.get("expires_at")
                     if (
                         not old_expires
@@ -93,18 +118,25 @@ class MasterySync:
                         logger.debug(
                             f"MasterySync: updated expires_at from API: {new_expires}"
                         )
+                    plan["expires_at"] = new_expires
             else:
-                # API 没有训练数据 → 标记失败
+                # 数据缺失不等同于训练中断。按已知 ETA 或 30 分钟退避复查，
+                # 避免网络/API 短暂失败把计划误判失败并触发立即任务循环。
+                refresh_time = datetime.now() + timedelta(minutes=30)
+                expires_at = plan.get("expires_at")
+                if expires_at:
+                    try:
+                        known_expiry = datetime.fromisoformat(expires_at)
+                        if known_expiry > datetime.now():
+                            refresh_time = known_expiry
+                    except ValueError:
+                        pass
                 logger.warning(
-                    "MasterySync: no building_training data, marking in_progress plan as failed"
+                    "MasterySync: no building_training data, keeping in_progress "
+                    f"plan and retrying at {refresh_time}"
                 )
-                insert_plan(
-                    plan["char_id"],
-                    plan["skill_index"],
-                    "failed",
-                    failed_reason="训练中断（未检测到进行中的训练）",
-                )
-                plan = None
+                self._ensure_single_train_refresh(refresh_time)
+                return
 
             # cultivate.json 检测到已满级
             if plan:
@@ -138,15 +170,24 @@ class MasterySync:
 
         if plan:
             expires_at = plan.get("expires_at")
-            if not expires_at or datetime.fromisoformat(expires_at) > datetime.now():
-                logger.info("MasterySync: in_progress plan found, adding REFRESH_TIME")
-                self._scheduler.tasks.append(
-                    SchedulerTask(
-                        time=datetime.now(),
-                        task_type=TaskTypes.REFRESH_TIME,
-                        meta_data="train",
-                    )
+            if not expires_at:
+                refresh_time = datetime.now() + timedelta(minutes=30)
+                logger.info(
+                    "MasterySync: in_progress plan has no ETA, "
+                    f"retrying at {refresh_time}"
                 )
+                self._ensure_single_train_refresh(refresh_time)
+                return
+            try:
+                refresh_time = datetime.fromisoformat(expires_at)
+            except ValueError:
+                refresh_time = datetime.now() + timedelta(minutes=30)
+            if refresh_time > datetime.now():
+                logger.info(
+                    "MasterySync: in_progress plan found, ensuring one future "
+                    f"REFRESH_TIME at {refresh_time}"
+                )
+                self._ensure_single_train_refresh(refresh_time)
                 return
 
         # 处理 in_progress 但 expires_at 已过的计划（重启断链兜底）
@@ -193,11 +234,13 @@ class MasterySync:
                     )
 
             if not training_completed:
+                refresh_time = datetime.now() + timedelta(minutes=30)
                 logger.warning(
-                    f"MasterySync: expired plan but API shows training not complete, "
-                    f"skipping: {char_id} skill{skill_index + 1}"
+                    "MasterySync: expired plan is not confirmed complete; "
+                    f"retrying at {refresh_time}: {char_id} skill{skill_index + 1}"
                 )
-                continue
+                self._ensure_single_train_refresh(refresh_time)
+                return
 
             insert_plan(char_id, skill_index, "completed", level=plan_level)
             if plan_level < 3:
@@ -283,13 +326,7 @@ class MasterySync:
 
             self._scheduler.op_data.skill_upgrade_supports = supports
 
-            self._scheduler.tasks.append(
-                SchedulerTask(
-                    time=datetime.now(),
-                    task_type=TaskTypes.REFRESH_TIME,
-                    meta_data="train",
-                )
-            )
+            self._ensure_single_train_refresh(datetime.now())
 
             # 从 building_training 数据或 op_data 获取当前助理
             current_assistant = self._scheduler.op_data.get_train_support()

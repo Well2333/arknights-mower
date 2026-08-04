@@ -151,8 +151,7 @@ def has_in_progress_plan() -> bool:
         row = conn.execute(
             "SELECT 1 FROM mastery_plan WHERE id IN ("
             "SELECT MAX(id) FROM mastery_plan GROUP BY char_id, skill_index"
-            ") AND status='in_progress' "
-            "AND (expires_at IS NULL OR expires_at > datetime('now','localtime'))"
+            ") AND status='in_progress'"
             " LIMIT 1"
         ).fetchone()
         return row is not None
@@ -169,8 +168,7 @@ def get_in_progress_plan() -> Optional[dict]:
         row = conn.execute(
             "SELECT * FROM mastery_plan WHERE id IN ("
             "SELECT MAX(id) FROM mastery_plan GROUP BY char_id, skill_index"
-            ") AND status='in_progress' "
-            "AND (expires_at IS NULL OR expires_at > datetime('now','localtime'))"
+            ") AND status='in_progress'"
             " LIMIT 1"
         ).fetchone()
         return dict(row) if row else None
