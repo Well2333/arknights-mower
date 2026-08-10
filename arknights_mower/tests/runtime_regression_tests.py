@@ -1,5 +1,8 @@
 import io
+import logging
+import sys
 import unittest
+from queue import Queue
 from unittest.mock import MagicMock, patch
 
 import cv2
@@ -7,8 +10,9 @@ import numpy as np
 
 from arknights_mower.solvers.base_schedule import BaseSchedulerSolver
 from arknights_mower.solvers.shop import _template_sqdiff_score
+from arknights_mower.utils import config
 from arknights_mower.utils.digit_reader import DigitReader
-from arknights_mower.utils.log import EncodingSafeStream
+from arknights_mower.utils.log import EncodingSafeStream, Handler
 
 
 class AsciiStream(io.StringIO):
@@ -16,6 +20,43 @@ class AsciiStream(io.StringIO):
 
 
 class TestRuntimeRegressions(unittest.TestCase):
+    def test_web_log_handler_formats_plain_record(self):
+        output = Queue()
+        record = logging.LogRecord(
+            "test", logging.INFO, __file__, 1, "plain %s", ("message",), None
+        )
+
+        with patch.object(config, "log_queue", output):
+            Handler().handle(record)
+
+        message = output.get_nowait()
+        self.assertIn(" INFO plain message", message)
+        self.assertRegex(message, r"^\d{4}-\d{2}-\d{2} ")
+
+    def test_web_log_handler_preserves_exception_traceback(self):
+        output = Queue()
+        try:
+            raise ValueError("web-log-probe")
+        except ValueError:
+            exc_info = sys.exc_info()
+        record = logging.LogRecord(
+            "test",
+            logging.ERROR,
+            __file__,
+            1,
+            "request failed",
+            (),
+            exc_info,
+        )
+
+        with patch.object(config, "log_queue", output):
+            Handler().handle(record)
+
+        message = output.get_nowait()
+        self.assertIn(" ERROR request failed", message)
+        self.assertIn("Traceback (most recent call last)", message)
+        self.assertIn("ValueError: web-log-probe", message)
+
     def test_digit_reader_uses_image_dimensions_when_not_provided(self):
         reader = DigitReader.__new__(DigitReader)
         reader.time_template = [np.zeros((1, 1), dtype=np.uint8) for _ in range(10)]

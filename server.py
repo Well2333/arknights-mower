@@ -114,15 +114,19 @@ def read_log():
         msg = config.log_queue.get()
         log_lines.append(msg)
         log_lines = log_lines[-100:]
-        for ws in ws_connections:
-            ws.send(
-                json.dumps(
-                    {"type": "log", "data": msg, "screenshot": get_latest_screenshot()}
-                )
-            )
+        _broadcast_log(msg)
 
 
-Thread(target=read_log, daemon=True).start()
+def _broadcast_log(msg):
+    payload = json.dumps(
+        {"type": "log", "data": msg, "screenshot": get_latest_screenshot()}
+    )
+    for ws in ws_connections.copy():
+        try:
+            ws.send(payload)
+        except Exception:
+            if ws in ws_connections:
+                ws_connections.remove(ws)
 
 
 def require_token(f):
@@ -415,7 +419,8 @@ def log(ws):
         while True:
             ws.receive()
     except ConnectionClosed:
-        ws_connections.remove(ws)
+        if ws in ws_connections:
+            ws_connections.remove(ws)
 
 
 @app.route("/screenshots/<path:filename>")
@@ -1466,3 +1471,4 @@ def ws_chat(ws):
 
 
 app.register_blueprint(mastery_bp)
+Thread(target=read_log, daemon=True).start()

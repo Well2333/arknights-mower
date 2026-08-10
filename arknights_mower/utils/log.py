@@ -3,7 +3,6 @@ import os
 import shutil
 import sys
 import time
-import traceback
 from datetime import datetime, timedelta
 from logging.handlers import QueueHandler, QueueListener, TimedRotatingFileHandler
 from pathlib import Path
@@ -22,6 +21,10 @@ COLOR_FORMAT = f"%(log_color)s{BASIC_FORMAT}"
 DATE_FORMAT = None
 basic_formatter = logging.Formatter(BASIC_FORMAT, DATE_FORMAT)
 color_formatter = colorlog.ColoredFormatter(COLOR_FORMAT, DATE_FORMAT)
+web_formatter = logging.Formatter(
+    "%(asctime)s %(levelname)s %(message)s", DATE_FORMAT
+)
+
 
 class EncodingSafeStream:
     """Escape characters unsupported by a terminal without losing the log line."""
@@ -77,11 +80,12 @@ fhlr = None
 
 
 class Handler(logging.StreamHandler):
+    def __init__(self):
+        super().__init__()
+        self.setFormatter(web_formatter)
+
     def emit(self, record: logging.LogRecord):
-        msg = f"{record.asctime} {record.levelname} {record.message}"
-        if record.exc_info:
-            msg += "\n" + "".join(traceback.format_exception(*record.exc_info))
-        config.log_queue.put(msg)
+        config.log_queue.put(self.format(record))
 
 
 # w(ebsocket)hlr: WebSocket

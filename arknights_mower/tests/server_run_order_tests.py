@@ -1,4 +1,6 @@
 import datetime
+import json
+import time
 import unittest
 from unittest.mock import MagicMock, patch
 
@@ -190,6 +192,44 @@ class TestDormOrderProtection(unittest.TestCase):
         )
         save_plan.assert_called_once()
         save_conf.assert_called_once()
+
+
+class TestWebSocketLogBroadcast(unittest.TestCase):
+    def setUp(self):
+        self.previous_connections = server.ws_connections
+        self.previous_log_lines = server.log_lines
+        server.ws_connections = []
+        server.log_lines = []
+
+    def tearDown(self):
+        server.ws_connections = self.previous_connections
+        server.log_lines = self.previous_log_lines
+
+    def test_log_reader_consumes_messages_after_server_startup(self):
+        config.log_queue.put("startup-probe")
+
+        for _ in range(100):
+            if "startup-probe" in server.log_lines:
+                break
+            time.sleep(0.01)
+
+        self.assertIn("startup-probe", server.log_lines)
+
+    def test_failed_connection_does_not_block_other_clients(self):
+        failed = MagicMock()
+        failed.send.side_effect = RuntimeError("connection closed")
+        healthy = MagicMock()
+        server.ws_connections.extend([failed, healthy])
+
+        with patch.object(server, "get_latest_screenshot", return_value=""):
+            server._broadcast_log("hello")
+
+        healthy.send.assert_called_once()
+        payload = json.loads(healthy.send.call_args.args[0])
+        self.assertEqual(payload["type"], "log")
+        self.assertEqual(payload["data"], "hello")
+        self.assertNotIn(failed, server.ws_connections)
+        self.assertIn(healthy, server.ws_connections)
 
 
 if __name__ == "__main__":
