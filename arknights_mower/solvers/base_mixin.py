@@ -189,16 +189,36 @@ class BaseMixin:
                 if index >= len(agent):
                     return True
                 if name != agent[index]:
-                    return False
+                    break
                 index += 1
-            return True
+            if index == len(agent):
+                return True
+            if error_count < 2:
+                logger.debug(
+                    f"干员选择校验不一致，第{error_count + 1}次刷新截图复核"
+                )
+                self.recog.update()
+                return self.verify_agent(
+                    agent,
+                    room,
+                    error_count + 1,
+                    max_agent_count,
+                    full_scan=False,
+                    train=train,
+                )
+            return False
         except Exception as e:
             error_count += 1
             if room != "train":
                 self.switch_arrange_order("技能", room)
             if error_count < 3:
                 return self.verify_agent(
-                    agent, room, error_count, max_agent_count, full_scan=False
+                    agent,
+                    room,
+                    error_count,
+                    max_agent_count,
+                    full_scan=False,
+                    train=train,
                 )
             else:
                 logger.exception(e)

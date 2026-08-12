@@ -3,6 +3,7 @@ from datetime import datetime, timedelta
 from unittest.mock import MagicMock, patch
 
 import arknights_mower.solvers.base_schedule as base_schedule
+import arknights_mower.solvers.base_mixin as base_mixin
 from arknights_mower.solvers.base_schedule import BaseSchedulerSolver
 from arknights_mower.utils.logic_expression import LogicExpression
 from arknights_mower.utils.operators import Dormitory, Operator
@@ -19,6 +20,40 @@ with patch.dict("sys.modules", {"RecruitSolver": MagicMock()}):
 
 
 class TestBaseScheduler(unittest.TestCase):
+    @patch.object(BaseSchedulerSolver, "__init__", lambda x: None)
+    def test_verify_agent_recovers_after_transient_mismatch(self):
+        solver = BaseSchedulerSolver()
+        solver.recog = MagicMock()
+        solver.find = MagicMock(return_value=None)
+
+        with patch.object(
+            base_mixin,
+            "operator_list",
+            side_effect=[[["错误干员", None]], [["目标干员", None]]],
+        ) as recognize:
+            result = solver.verify_agent(["目标干员"], "dormitory_1")
+
+        self.assertTrue(result)
+        self.assertEqual(recognize.call_count, 2)
+        solver.recog.update.assert_called_once_with()
+
+    @patch.object(BaseSchedulerSolver, "__init__", lambda x: None)
+    def test_verify_agent_rejects_persistent_mismatch_or_empty_result(self):
+        solver = BaseSchedulerSolver()
+        solver.recog = MagicMock()
+        solver.find = MagicMock(return_value=None)
+
+        with patch.object(
+            base_mixin,
+            "operator_list",
+            side_effect=[[["错误干员", None]], [], [["错误干员", None]]],
+        ) as recognize:
+            result = solver.verify_agent(["目标干员"], "dormitory_1")
+
+        self.assertFalse(result)
+        self.assertEqual(recognize.call_count, 3)
+        self.assertEqual(solver.recog.update.call_count, 2)
+
     @patch.object(BaseSchedulerSolver, "__init__", lambda x: None)
     def test_run_order_solver_uses_current_time_for_expired_exhaust_task(self):
         solver = BaseSchedulerSolver()
