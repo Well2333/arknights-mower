@@ -891,6 +891,47 @@ class TestSchedulerStability(unittest.TestCase):
         self.assertIsNone(result)
         self.assertEqual(solver.tasks, [])
 
+    def test_self_correction_accepts_replacement_for_off_duty_ungrouped_high(self):
+        now = datetime.now()
+        ash = Operator(
+            "灰烬",
+            "room_2_2",
+            index=1,
+            replacement=["赤刃明霄陈"],
+            current_room="",
+            current_index=-1,
+            mood=9.523,
+            operator_type="high",
+            time_stamp=now,
+        )
+        chen = Operator(
+            "赤刃明霄陈",
+            "",
+            current_room="room_2_2",
+            current_index=1,
+            mood=24,
+            operator_type="low",
+            time_stamp=now,
+        )
+        solver = BaseSchedulerSolver.__new__(BaseSchedulerSolver)
+        solver.tasks = []
+        solver.op_data = MagicMock()
+        solver.op_data.operators = {"灰烬": ash, "赤刃明霄陈": chen}
+        solver.op_data.groups = {}
+        solver.op_data.plan = {
+            "room_2_2": [
+                Room("凯尔希", "", ["荒芜拉普兰德", "多萝西"]),
+                Room("灰烬", "", ["赤刃明霄陈"]),
+            ]
+        }
+        solver.op_data.true_exhaust_room = set()
+        solver.op_data.get_current_room.return_value = ["多萝西", "赤刃明霄陈"]
+
+        result = solver.agent_get_mood(skip_dorm=True)
+
+        self.assertIsNone(result)
+        self.assertEqual(solver.tasks, [])
+
 class TestMasteryAndDroneHardening(unittest.TestCase):
     def test_mastery_sync_twice_keeps_one_refresh_and_local_expiry(self):
         from arknights_mower.utils import mastery_sync

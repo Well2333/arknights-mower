@@ -884,6 +884,20 @@ class BaseSchedulerSolver(SceneGraphSolver, BaseMixin):
             logger.debug(f"高效组心情没有记录{str(miss_list)}")
             for key in miss_list:
                 _agent = miss_list[key]
+                current_room = self.op_data.get_current_room(_agent.room, True)
+                current_name = (
+                    current_room[_agent.index]
+                    if 0 <= _agent.index < len(current_room)
+                    else ""
+                )
+                if (
+                    current_name in plan[_agent.room][_agent.index].replacement
+                    and current_name not in TRADE_ORDER_AGENTS
+                ):
+                    logger.debug(
+                        f"{key} 已由合法替补 {current_name} 顶岗，跳过纠错"
+                    )
+                    continue
                 if (
                     _agent.group != ""
                     and next(
