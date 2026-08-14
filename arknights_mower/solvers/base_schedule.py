@@ -1054,11 +1054,13 @@ class BaseSchedulerSolver(SceneGraphSolver, BaseMixin):
                 if scene == Scene.INFRA_MAIN:
                     self.enter_room("train")
                 if scene == Scene.TRAIN_MAIN:
-                    completion_time = self.double_read_time(((236, 978), (380, 1020)))
-                    if task is not None:
-                        task.time = completion_time
-                    if completion_time <= datetime.now():
-                        is_completed = True
+                    seconds = self.read_time(((236, 978), (380, 1020)), upperlimit=None)
+                    if seconds is not None:
+                        completion_time = datetime.now() + timedelta(seconds=seconds)
+                        if task is not None:
+                            task.time = completion_time
+                        if seconds <= 0:
+                            is_completed = True
                     del tasks[0]
                 if scene == Scene.TRAIN_SKILL_SELECT:
                     self.back()
@@ -1231,6 +1233,11 @@ class BaseSchedulerSolver(SceneGraphSolver, BaseMixin):
         try:
             from arknights_mower.solvers.player_info import player_info_cache
             from arknights_mower.utils.mastery_db import get_in_progress_plan
+
+            plan = get_in_progress_plan()
+            if plan and plan.get("level", 1) >= 3:
+                logger.debug("refresh_skill_time: level 3 训练无需减半换人，跳过")
+                return
 
             remaining_h = (completion_time - datetime.now()).total_seconds() / 3600
             if remaining_h <= 0:
@@ -1637,9 +1644,9 @@ class BaseSchedulerSolver(SceneGraphSolver, BaseMixin):
                             del tasks[0]
                         else:
                             if self.find("training_idle"):
-                                logger.debug("训练室空闲，移除任务")
+                                logger.debug("训练室空闲，准备开始升级")
                                 del tasks[0]
-                                return
+                                continue
                             execute_time = self.double_read_time(
                                 ((236, 978), (380, 1020))
                             )
@@ -1676,12 +1683,15 @@ class BaseSchedulerSolver(SceneGraphSolver, BaseMixin):
                         )
                     if tasks[0] == "confirm":
                         # 读取专精倒计时 如果没有，判定专精失败
-                        execute_time = self.double_read_time(((236, 978), (380, 1020)))
-                        if execute_time < (datetime.now() + timedelta(hours=2)):
+                        seconds = self.read_time(
+                            ((236, 978), (380, 1020)), upperlimit=None
+                        )
+                        if seconds is None or seconds < 2 * 3600:
                             raise Exception(
                                 "未获取专精时间倒计时，请确认技能专精材料充足"
                             )
                         else:
+                            execute_time = datetime.now() + timedelta(seconds=seconds)
                             plan_key = getattr(self.task, "plan_key", "")
                             if plan_key:
                                 parts = plan_key.rsplit("_", 1)
@@ -1810,7 +1820,7 @@ class BaseSchedulerSolver(SceneGraphSolver, BaseMixin):
                     None,
                 )
                 if support is not None:
-                    if not config.conf.assistant_follows_schedule:
+                    if not config.conf.assistant_follows_schedule and level < 3:
                         self.tasks.append(
                             SchedulerTask(
                                 task_plan={"train": [support.name, "Current"]},
@@ -4693,11 +4703,19 @@ class BaseSchedulerSolver(SceneGraphSolver, BaseMixin):
             None,
         )
         if stage_meta is None:
-            return None
+            return self._ap_fallback_or_none()
         ap_cost = stage_meta.get("apCost")
         if not isinstance(ap_cost, int) or ap_cost <= 0:
-            return None
+            return self._ap_fallback_or_none()
         return ap_cost
+
+    def _ap_fallback_or_none(self) -> int | None:
+        from arknights_mower.utils.config import conf
+
+        fallback = conf.ap_fallback
+        if isinstance(fallback, int) and fallback > 0:
+            return fallback
+        return None
 
     def clear_local_operation_followups(self):
         existing_count = sum(
@@ -4969,6 +4987,15 @@ class BaseSchedulerSolver(SceneGraphSolver, BaseMixin):
                         if any(
                             self.mower_stage_ap_cost(stage) is None for stage in stages
                         ):
+                            missing = [
+                                stage
+                                for stage in stages
+                                if self.mower_stage_ap_cost(stage) is None
+                            ]
+                            logger.error(
+                                f"关卡信息未找到，无法获取体力消耗: {missing}，"
+                                "请在「刷理智周计划」中设置 AP fallback（关卡体力消耗默认值）"
+                            )
                             logger.warning(
                                 "stage apCost missing in weekly plan, disable threshold control and fallback to drain sanity"
                             )
@@ -5031,6 +5058,7 @@ class BaseSchedulerSolver(SceneGraphSolver, BaseMixin):
 
                         if (
                             simulated_current_ap is not None
+                            and ap_cost is not None
                             and simulated_current_ap < ap_cost
                         ):
                             logger.info(

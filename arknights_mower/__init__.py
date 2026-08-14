@@ -3,7 +3,7 @@ import sys
 from pathlib import Path
 
 __version__ = (
-    "4.1.5.7-custom-runorder3-immediate-runorder-mergeinterval-fix2-defer-tasks"
+    "4.1.5.8-custom-runorder3-immediate-runorder-mergeinterval-fix2-defer-tasks"
 )
 
 if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):

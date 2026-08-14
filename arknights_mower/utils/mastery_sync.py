@@ -390,9 +390,11 @@ class MasterySync:
 
         try:
             plan_level = plan.get("level", 1)
-            insert_plan(char_id, skill_index, "in_progress", level=plan_level)
+            # 不在这里提前标记 in_progress：只有 skill_upgrade 真正读取到训练倒计时
+            # （确认开始升级）后才会 set_plan_status(in_progress) 并写入 expires_at。
+            # 否则训练尚未启动，MasterySync 会误判为进行中并反复添加 REFRESH_TIME。
             logger.debug(
-                f"MasterySync: insert plan in_progress char={char_id} skill={skill_index} level={plan_level}"
+                f"MasterySync: schedule plan char={char_id} skill={skill_index} level={plan_level}"
             )
 
             parsed = _json.loads(route["supports"])
@@ -409,7 +411,7 @@ class MasterySync:
             name = char_info.get("name", char_id)
             sk = str(skill_index + 1)
 
-            if supports:
+            if supports and plan_level < 3:
                 self._scheduler.tasks.append(
                     SchedulerTask(
                         task_plan={"train": [supports[0].name, name]},
