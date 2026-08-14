@@ -22,6 +22,7 @@ with patch.dict("sys.modules", {"RecruitSolver": MagicMock()}):
 class TestBaseScheduler(unittest.TestCase):
     def test_backup_validation_checks_disjoint_plans_together(self):
         operators = Operators.__new__(Operators)
+        operators.run_order_rooms = {"room_1_1": {}, "room_2_1": {}}
         first = MagicMock()
         first.plan = {"room_1_1": [Room("芬", "", ["香草"])]}
         second = MagicMock()
@@ -40,6 +41,28 @@ class TestBaseScheduler(unittest.TestCase):
         self.assertFalse(result["success"])
         self.assertIn("组合状态冲突", result["message"])
         operators.swap_plan.assert_any_call([True, True], True)
+
+    def test_backup_validation_rejects_lost_run_order_room(self):
+        operators = Operators.__new__(Operators)
+        operators.run_order_rooms = {}
+        backup = MagicMock()
+        backup.plan = {"room_2_1": [Room("芬", "", ["香草"])]}
+        operators.backup_plans = [backup]
+
+        def validate(condition, refresh):
+            operators.run_order_rooms = (
+                {"room_1_1": {}, "room_2_1": {}}
+                if condition == [False]
+                else {"room_1_1": {}}
+            )
+            return None
+
+        operators.swap_plan = MagicMock(side_effect=validate)
+
+        result = operators.validate_backup_plans()
+
+        self.assertFalse(result["success"])
+        self.assertIn("跑单房间在副表组合中发生变化", result["message"])
 
     @patch.object(BaseSchedulerSolver, "__init__", lambda x: None)
     def test_verify_agent_recovers_after_transient_mismatch(self):

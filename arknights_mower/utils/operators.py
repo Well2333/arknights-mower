@@ -196,6 +196,9 @@ class Operators:
         self.exhaust_group = set()
         self.rest_in_full_group = set()
         self.workaholic_agent = set()
+        # 副表切换时必须按当前活动计划重新计算；否则默认表留下的跑单房间
+        # 会掩盖副表遗漏跑单干员标记的问题。
+        self.run_order_rooms = {}
         self.shadow_copy = copy.deepcopy(self.operators)
         self.operators = {}
         for room in self.plan.keys():
@@ -244,6 +247,21 @@ class Operators:
                     return f"替换组不可同时安排龙舌兰, 但书或者佩佩 房间->{room}, 干员->{data.agent}"
                 if "菲亚梅塔" in data.replacement:
                     return f"替换组不可安排菲亚梅塔 房间->{room}, 干员->{data.agent}"
+                trade_replacements = [
+                    replacement
+                    for replacement in data.replacement
+                    if any(
+                        char in replacement for char in TRADE_ORDER_AGENTS
+                    )
+                ]
+                if (
+                    trade_replacements
+                    and data.replacement[0] != trade_replacements[0]
+                ):
+                    return (
+                        "跑单干员必须位于替换组首位: "
+                        f"房间->{room}, 干员->{data.agent}"
+                    )
                 r_count = len(data.replacement)
                 if any(
                     char in replacement_str
@@ -805,10 +823,20 @@ class Operators:
         # 但通过默认表位置、替换链或高效组间接冲突”的组合。
         if backup_count <= 10:
             tested_count = 0
+            expected_run_order_rooms = None
             for condition in product([False, True], repeat=backup_count):
                 tested_count += 1
                 logger.debug(f"验证副表条件：{condition}")
                 validation_msg = self.swap_plan(list(condition), True)
+                current_run_order_rooms = set(self.run_order_rooms)
+                if expected_run_order_rooms is None:
+                    expected_run_order_rooms = current_run_order_rooms
+                elif current_run_order_rooms != expected_run_order_rooms:
+                    validation_msg = (
+                        "跑单房间在副表组合中发生变化: "
+                        f"期望 {sorted(expected_run_order_rooms)}, "
+                        f"实际 {sorted(current_run_order_rooms)}"
+                    )
                 if validation_msg is not None:
                     self.swap_plan([False] * backup_count, True)
                     logger.info(
@@ -861,8 +889,10 @@ class Operators:
 
         tested_conditions: set[tuple[bool, ...]] = set()
         tested_sequence: list[tuple[bool, ...]] = []
+        expected_run_order_rooms = None
 
         def validate_condition(condition: list[bool]) -> tuple[bool, str]:
+            nonlocal expected_run_order_rooms
             key = tuple(condition)
             if key in tested_conditions:
                 return True, ""
@@ -870,6 +900,15 @@ class Operators:
             tested_sequence.append(key)
             logger.debug(f"验证副表条件：{condition}")
             validation_msg = self.swap_plan(condition, True)
+            current_run_order_rooms = set(self.run_order_rooms)
+            if expected_run_order_rooms is None:
+                expected_run_order_rooms = current_run_order_rooms
+            elif current_run_order_rooms != expected_run_order_rooms:
+                validation_msg = (
+                    "跑单房间在副表组合中发生变化: "
+                    f"期望 {sorted(expected_run_order_rooms)}, "
+                    f"实际 {sorted(current_run_order_rooms)}"
+                )
             if validation_msg is not None:
                 logger.info(
                     f"替换排班验证错误：{validation_msg}, 附表条件为 {condition}"
