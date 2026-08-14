@@ -801,6 +801,32 @@ class Operators:
         if backup_count == 0:
             return {"success": True, "message": "没有备用计划，无需验证"}
 
+        # 常见配置的副表数量很少，直接穷举才能覆盖“显式干员不重叠，
+        # 但通过默认表位置、替换链或高效组间接冲突”的组合。
+        if backup_count <= 10:
+            tested_count = 0
+            for condition in product([False, True], repeat=backup_count):
+                tested_count += 1
+                logger.debug(f"验证副表条件：{condition}")
+                validation_msg = self.swap_plan(list(condition), True)
+                if validation_msg is not None:
+                    self.swap_plan([False] * backup_count, True)
+                    logger.info(
+                        f"替换排班验证错误：{validation_msg}, 附表条件为 {condition}"
+                    )
+                    return {
+                        "success": False,
+                        "message": (
+                            f"穷举组合验证失败（条件 {condition}）："
+                            f"{validation_msg}"
+                        ),
+                    }
+            self.swap_plan([False] * backup_count, True)
+            return {
+                "success": True,
+                "message": f"验证成功，共穷举验证 {tested_count} 次",
+            }
+
         def collect_agents(plan: Plan) -> set[str]:
             agents = set()
             for room_info in plan.plan.values():
@@ -1069,71 +1095,8 @@ class Operator:
 def validate_backup_plans_offline():
     """独立的验证函数，不依赖于 BaseSchedulerSolver"""
     global_plan = build_global_plan()
-    backup_plans = global_plan["backup_plans"]
-
-    backup_count = len(backup_plans)
-    if backup_count == 0:
-        return {"success": True, "message": "没有备用计划，无需验证"}
-
-    def collect_agents(plan: Plan) -> set[str]:
-        agents = set()
-        for room_info in plan.plan.values():
-            for op in room_info:
-                if op.agent not in ("Current", "Free"):
-                    agents.add(op.agent)
-        return agents
-
-    agent_sets = [collect_agents(plan) for plan in backup_plans]
-    adjacency = [set() for _ in range(backup_count)]
-    for i in range(backup_count):
-        for j in range(i + 1, backup_count):
-            if agent_sets[i].intersection(agent_sets[j]):
-                adjacency[i].add(j)
-                adjacency[j].add(i)
-
-    components: list[list[int]] = []
-    visited = [False] * backup_count
-    for i in range(backup_count):
-        if visited[i]:
-            continue
-        stack = [i]
-        component = []
-        while stack:
-            node = stack.pop()
-            if visited[node]:
-                continue
-            visited[node] = True
-            component.append(node)
-            stack.extend(adjacency[node])
-        components.append(component)
-
-    tested_conditions: set[tuple[bool, ...]] = set()
-    tested_sequence: list[tuple[bool, ...]] = []
-
-    # 复制类方法中的验证逻辑
-    for component in components:
-        if len(component) == 1:
-            continue
-        # 检查连通分量中的计划是否有冲突
-        for mask in product([False, True], repeat=len(component)):
-            if mask in tested_conditions:
-                continue
-            tested_conditions.add(mask)
-            tested_sequence.append(mask)
-            active_plans = [
-                backup_plans[i] for i, active in zip(component, mask) if active
-            ]
-            if not active_plans:
-                continue
-            combined_agents = set()
-            for plan in active_plans:
-                combined_agents.update(collect_agents(plan))
-            if len(combined_agents) < sum(
-                len(collect_agents(plan)) for plan in active_plans
-            ):
-                return {
-                    "success": False,
-                    "message": f"备用计划 {', '.join(str(i + 1) for i in component)} 中存在干员重复安排",
-                }
-
-    return {"success": True, "message": "备用计划验证通过"}
+    operators = Operators(global_plan)
+    initialization = operators.init_and_validate()
+    if initialization is not None:
+        return {"success": False, "message": f"基础验证失败：{initialization}"}
+    return operators.validate_backup_plans()

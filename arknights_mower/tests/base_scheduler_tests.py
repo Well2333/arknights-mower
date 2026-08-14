@@ -6,7 +6,7 @@ import arknights_mower.solvers.base_schedule as base_schedule
 import arknights_mower.solvers.base_mixin as base_mixin
 from arknights_mower.solvers.base_schedule import BaseSchedulerSolver
 from arknights_mower.utils.logic_expression import LogicExpression
-from arknights_mower.utils.operators import Dormitory, Operator
+from arknights_mower.utils.operators import Dormitory, Operator, Operators
 from arknights_mower.utils.plan import Plan, PlanConfig, PlanTriggerTiming, Room
 from arknights_mower.utils.recognize import Scene
 from arknights_mower.utils.scheduler_task import (
@@ -20,6 +20,27 @@ with patch.dict("sys.modules", {"RecruitSolver": MagicMock()}):
 
 
 class TestBaseScheduler(unittest.TestCase):
+    def test_backup_validation_checks_disjoint_plans_together(self):
+        operators = Operators.__new__(Operators)
+        first = MagicMock()
+        first.plan = {"room_1_1": [Room("芬", "", ["香草"])]}
+        second = MagicMock()
+        second.plan = {"room_2_1": [Room("克洛丝", "", ["安比尔"])]}
+        operators.backup_plans = [first, second]
+
+        def validate(condition, refresh):
+            if condition == [True, True]:
+                return "组合状态冲突"
+            return None
+
+        operators.swap_plan = MagicMock(side_effect=validate)
+
+        result = operators.validate_backup_plans()
+
+        self.assertFalse(result["success"])
+        self.assertIn("组合状态冲突", result["message"])
+        operators.swap_plan.assert_any_call([True, True], True)
+
     @patch.object(BaseSchedulerSolver, "__init__", lambda x: None)
     def test_verify_agent_recovers_after_transient_mismatch(self):
         solver = BaseSchedulerSolver()
