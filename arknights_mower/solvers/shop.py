@@ -18,6 +18,25 @@ for i in range(2):
     for j in range(5):
         card_list.append((left + j * (card_w + gap), top + i * (card_h + gap)))
 
+def _template_sqdiff_score(img, template):
+    """Return a template score after padding undersized OCR fragments."""
+    height_padding = max(0, template.shape[0] - img.shape[0])
+    width_padding = max(0, template.shape[1] - img.shape[1])
+    if height_padding or width_padding:
+        img = cv2.copyMakeBorder(
+            img,
+            height_padding // 2,
+            height_padding - height_padding // 2,
+            width_padding // 2,
+            width_padding - width_padding // 2,
+            cv2.BORDER_CONSTANT,
+            None,
+            (0,),
+        )
+    result = cv2.matchTemplate(img, template, cv2.TM_SQDIFF_NORMED)
+    min_val, _, _, _ = cv2.minMaxLoc(result)
+    return min_val
+
 
 class CreditShop(SceneGraphSolver):
     def run(self):
@@ -65,11 +84,8 @@ class CreditShop(SceneGraphSolver):
             score = []
             for i in range(10):
                 im = templates[i]
-                result = cv2.matchTemplate(digit, im, cv2.TM_SQDIFF_NORMED)
-                min_val, max_val, min_loc, max_loc = cv2.minMaxLoc(result)
-                score.append(min_val)
+                score.append(_template_sqdiff_score(digit, im))
             value = value * 10 + score.index(min(score))
-
         return value
 
     def credit_remain(self):

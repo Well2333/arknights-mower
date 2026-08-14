@@ -1,6 +1,7 @@
 <script setup>
 import { storeToRefs } from 'pinia'
 import { onMounted, onUnmounted, inject, nextTick, watch, ref } from 'vue'
+import { useDialog, useMessage } from 'naive-ui'
 
 import { useMowerStore } from '@/stores/mower'
 const mower_store = useMowerStore()
@@ -113,7 +114,6 @@ import FlashIcon from '@vicons/ionicons5/Flash'
 import PlaySkipForwardIcon from '@vicons/ionicons5/PlaySkipForward'
 import CollapseIcon from '@vicons/fluent/PanelTopContract20Regular'
 import ExpandIcon from '@vicons/fluent/PanelTopExpand20Regular'
-import { useDialog, useMessage } from 'naive-ui'
 
 const dialog = useDialog()
 const message = useMessage()
@@ -148,9 +148,7 @@ function immediate_run_order() {
     onPositiveClick: async () => {
       immediate_run_order_loading.value = true
       try {
-        const { data } = await axios.post(
-          `${import.meta.env.VITE_HTTP_URL}/run-order/immediate`
-        )
+        const { data } = await axios.post(`${import.meta.env.VITE_HTTP_URL}/run-order/immediate`)
         if (data.success) {
           message.success(data.message)
           clearTimeout(get_task_id.value)

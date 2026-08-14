@@ -890,6 +890,33 @@ class Dormitory:
         self.time = None
 
 
+def reconcile_saved_dormitories(planned_dorms, saved_dorms, operators):
+    """按当前计划床位合并保存状态，避免旧状态覆盖新增机动床位。"""
+    saved_by_position = {tuple(dorm.position): dorm for dorm in saved_dorms}
+    occupants_by_position = {
+        (operator.current_room, operator.current_index): operator
+        for operator in operators.values()
+        if operator.current_room.startswith("dormitory_")
+    }
+    for dorm in planned_dorms:
+        position = tuple(dorm.position)
+        saved = saved_by_position.get(position)
+        occupant = occupants_by_position.get(position)
+        if occupant is not None:
+            dorm.name = occupant.name
+            dorm.time = (
+                saved.time
+                if saved is not None and saved.name == occupant.name
+                else None
+            )
+        elif saved is not None:
+            dorm.name = saved.name
+            dorm.time = saved.time
+        else:
+            dorm.reset()
+    return planned_dorms
+
+
 class Operator:
     def __init__(
         self,

@@ -59,6 +59,10 @@ from arknights_mower.utils.email import maa_template, send_message, task_templat
 from arknights_mower.utils.graph import SceneGraphSolver
 from arknights_mower.utils.image import cropimg, loadres, thres2
 from arknights_mower.utils.log import logger
+from arknights_mower.utils.maa_check import (
+    is_maa_connectivity_check_enabled,
+    run_maa_connectivity_check,
+)
 from arknights_mower.utils.operators import Operator, Operators
 from arknights_mower.utils.path import get_path
 from arknights_mower.utils.plan import PlanTriggerTiming
@@ -70,6 +74,8 @@ from arknights_mower.utils.scheduler_task import (
     find_next_task,
     find_run_order_merge_pair,
     plan_metadata,
+    sanitize_self_correction_plan,
+    shift_on_readiness_retry_names,
     scheduling,
     try_add_release_dorm,
     try_reorder,
@@ -439,6 +445,12 @@ class BaseSchedulerSolver(SceneGraphSolver, BaseMixin):
                 if task.type == TaskTypes.SHIFT_ON:
                     for room, operators in task.plan.items():
                         if target in operators:
+                            if self.op_data.operators[target].group:
+                                logger.info(
+                                    f"{target}属于多人组，菲亚充能不提前整组回班"
+                                )
+                                self.tasks.sort(key=lambda task: task.time)
+                                return
                             task.time = self.task.time + timedelta(seconds=1)
                             self.tasks.sort(key=lambda task: task.time)
                             return
@@ -605,7 +617,42 @@ class BaseSchedulerSolver(SceneGraphSolver, BaseMixin):
                         self.plan_run_order(self.task.meta_data)
                     self.skip(["todo_task", "collect_notification"])
                 elif self.task.type == TaskTypes.NOT_SPECIFIC:
-                    pass
+                    retry_names = shift_on_readiness_retry_names(self.task.meta_data)
+                    if retry_names:
+                        logger.info(f"重读宿舍 ETA: {retry_names}")
+                        dorm_rooms = set()
+                        dorm_by_name = {
+                            dorm.name: dorm
+                            for dorm in self.op_data.dorm
+                            if dorm.name
+                        }
+                        for name in retry_names:
+                            if name not in self.op_data.operators:
+                                continue
+                            dorm = dorm_by_name.get(name)
+                            if dorm is not None:
+                                dorm_rooms.add(dorm.position[0])
+                            else:
+                                room = self.op_data.operators[name].current_room
+                                if room.startswith("dorm"):
+                                    dorm_rooms.add(room)
+                        if self.task in self.tasks:
+                            self.tasks.remove(self.task)
+                        try:
+                            for room in sorted(dorm_rooms):
+                                self.enter_room(room)
+                                try:
+                                    self.get_agent_from_room(room)
+                                finally:
+                                    self.back()
+                        except Exception as retry_error:
+                            logger.exception(f"重读宿舍 ETA 失败: {retry_error}")
+                            self.error = True
+                        self.plan_metadata()
+                        if self.tasks and self.tasks[0].type == TaskTypes.SHIFT_ON:
+                            self.backup_plan_solver(PlanTriggerTiming.AFTER_PLANNING)
+                        self.task = None
+                        return
                 del self.tasks[0]
                 if self.tasks and self.tasks[0].type in [TaskTypes.SHIFT_ON]:
                     self.backup_plan_solver(PlanTriggerTiming.AFTER_PLANNING)
@@ -838,6 +885,20 @@ class BaseSchedulerSolver(SceneGraphSolver, BaseMixin):
             logger.debug(f"高效组心情没有记录{str(miss_list)}")
             for key in miss_list:
                 _agent = miss_list[key]
+                current_room = self.op_data.get_current_room(_agent.room, True)
+                current_name = (
+                    current_room[_agent.index]
+                    if 0 <= _agent.index < len(current_room)
+                    else ""
+                )
+                if (
+                    current_name in plan[_agent.room][_agent.index].replacement
+                    and current_name not in TRADE_ORDER_AGENTS
+                ):
+                    logger.debug(
+                        f"{key} 已由合法替补 {current_name} 顶岗，跳过纠错"
+                    )
+                    continue
                 if (
                     _agent.group != ""
                     and next(
@@ -907,42 +968,42 @@ class BaseSchedulerSolver(SceneGraphSolver, BaseMixin):
             if len(remove_keys) > 0:
                 for item in remove_keys:
                     del fix_plan[item]
-            # 还要确保同一组在同时上班
+            # 混合组只能由合法换班任务收敛，纠错不得把休息成员拉回岗位
             for g in self.op_data.groups:
                 g_agents = self.op_data.groups[g]
-                is_any_working = next(
-                    (
-                        x
-                        for x in g_agents
-                        if self.op_data.operators[x].current_room != ""
-                        and not self.op_data.operators[x].is_resting()
-                    ),
-                    None,
+                working = any(
+                    self.op_data.operators[x].current_room != ""
+                    and not self.op_data.operators[x].is_resting()
+                    for x in g_agents
                 )
-                if is_any_working is not None:
-                    # 确保所有人同时在上班
-                    is_any_resting = next(
-                        (
-                            x
-                            for x in g_agents
-                            if self.op_data.operators[x].current_room == ""
-                            or self.op_data.operators[x].is_resting()
-                        ),
-                        None,
+                resting = any(
+                    self.op_data.operators[x].current_room == ""
+                    or self.op_data.operators[x].is_resting()
+                    for x in g_agents
+                )
+                if working and resting:
+                    logger.warning(
+                        f"{g}组处于部分工作、部分休息状态，等待合法换班任务收敛"
                     )
-                    if is_any_resting is not None:
-                        # 生成纠错任务
-                        for x in g_agents:
-                            if (
-                                self.op_data.operators[x].current_room == ""
-                                or self.op_data.operators[x].is_resting()
-                            ):
-                                room = self.op_data.operators[x].room
-                                if room == "train":
-                                    continue
-                                if room not in fix_plan:
-                                    fix_plan[room] = ["Current"] * len(plan[room])
-                                fix_plan[room][self.op_data.operators[x].index] = x
+            protected_high_names = {
+                operator.name
+                for operator in self.op_data.operators.values()
+                if operator.is_high()
+                and (
+                    operator.is_resting()
+                    or (operator.group and operator.current_room == "")
+                )
+            }
+            current_by_room = {
+                room: self.op_data.get_current_room(room, True)
+                for room in fix_plan
+                if not room.startswith("dormitory")
+            }
+            fix_plan = sanitize_self_correction_plan(
+                fix_plan,
+                protected_high_names,
+                current_by_room,
+            )
             if len(fix_plan.keys()) > 0:
                 # 如果5分钟之内有任务则跳过心情读取
                 next_task = self.find_next_task()
@@ -1020,6 +1081,10 @@ class BaseSchedulerSolver(SceneGraphSolver, BaseMixin):
         except Exception as e:
             save_exception(e)
             logger.exception(e)
+            # 当前刷新任务执行完会被调度器移除；异常时保留一个有界退避任务。
+            self._upsert_train_refresh_task(
+                datetime.now() + timedelta(minutes=30)
+            )
 
     def _handle_training_complete(self):
         try:
@@ -1041,10 +1106,6 @@ class BaseSchedulerSolver(SceneGraphSolver, BaseMixin):
                 )
                 return
 
-            char_id = training["trainee"]["charId"]
-            skill_index = training["trainee"]["targetSkill"]
-            logger.info(f"训练完成: char={char_id} skill_index={skill_index}")
-
             plan = get_in_progress_plan()
             if not plan:
                 logger.info(
@@ -1052,7 +1113,26 @@ class BaseSchedulerSolver(SceneGraphSolver, BaseMixin):
                 )
                 return
 
+            char_id = training["trainee"]["charId"]
+            skill_index = training["trainee"]["targetSkill"]
+            if char_id != plan["char_id"]:
+                logger.warning(
+                    "refresh_skill_time: completed trainee does not match "
+                    f"in_progress plan ({char_id} != {plan['char_id']})"
+                )
+                return
+            if skill_index == -1:
+                skill_index = plan["skill_index"]
+            if skill_index != plan["skill_index"]:
+                logger.warning(
+                    "refresh_skill_time: completed skill does not match "
+                    f"in_progress plan ({skill_index} != {plan['skill_index']})"
+                )
+                return
+            logger.info(f"训练完成: char={char_id} skill_index={skill_index}")
+
             plan_level = plan.get("level", 1)
+            plan_key = f"{char_id}_{skill_index}"
 
             if plan_level >= 3:
                 insert_plan(char_id, skill_index, "completed", level=plan_level)
@@ -1073,16 +1153,32 @@ class BaseSchedulerSolver(SceneGraphSolver, BaseMixin):
                     meta_data=f"{name} 技能{sk}",
                     adjusted=True,
                 )
-                t.plan_key = f"{char_id}_{skill_index}"
-                self.tasks.append(t)
-                logger.info(f"触发下一级专精: {name} 技能{sk}")
+                t.plan_key = plan_key
+                existing = [
+                    task
+                    for task in self.tasks
+                    if task.type == TaskTypes.SKILL_UPGRADE
+                    and getattr(task, "plan_key", "") == plan_key
+                ]
+                if existing:
+                    keeper = min(existing, key=lambda task: task.time)
+                    keeper.time = datetime.now()
+                    keeper.meta_data = t.meta_data
+                    keeper.adjusted = True
+                    for duplicate in existing:
+                        if duplicate is not keeper:
+                            self.tasks.remove(duplicate)
+                    logger.info(
+                        f"提前触发已存在的下一级专精: {name} 技能{sk}"
+                    )
+                else:
+                    self.tasks.append(t)
+                    logger.info(f"触发下一级专精: {name} 技能{sk}")
         except Exception as e:
             logger.debug(f"refresh_skill_time: _handle_training_complete failed: {e}")
 
     def _update_expires_at(self, completion_time):
         try:
-            from datetime import timezone
-
             from arknights_mower.utils.mastery_db import (
                 get_in_progress_plan,
                 set_plan_status,
@@ -1090,10 +1186,7 @@ class BaseSchedulerSolver(SceneGraphSolver, BaseMixin):
 
             plan = get_in_progress_plan()
             if plan:
-                duration = completion_time - datetime.now()
-                expires_at = (datetime.now(timezone.utc) + duration).strftime(
-                    "%Y-%m-%d %H:%M:%S"
-                )
+                expires_at = completion_time.strftime("%Y-%m-%d %H:%M:%S")
                 set_plan_status(
                     plan["char_id"],
                     plan["skill_index"],
@@ -1108,19 +1201,53 @@ class BaseSchedulerSolver(SceneGraphSolver, BaseMixin):
         except Exception as e:
             logger.debug(f"refresh_skill_time: update expires_at failed: {e}")
 
+    def _upsert_train_refresh_task(self, refresh_time):
+        refresh_tasks = [
+            task
+            for task in self.tasks
+            if task is not self.task
+            and task.type == TaskTypes.REFRESH_TIME
+            and task.meta_data == "train"
+        ]
+        if refresh_tasks:
+            keeper = min(refresh_tasks, key=lambda task: task.time)
+            keeper.time = refresh_time
+            keeper.adjusted = True
+            for duplicate in refresh_tasks:
+                if duplicate is not keeper:
+                    self.tasks.remove(duplicate)
+            return keeper
+
+        task = SchedulerTask(
+            time=refresh_time,
+            task_type=TaskTypes.REFRESH_TIME,
+            meta_data="train",
+        )
+        self.tasks.append(task)
+        return task
+
     def _calculate_swap_from_api(self, completion_time):
+        next_refresh_time = completion_time
         try:
             from arknights_mower.solvers.player_info import player_info_cache
+            from arknights_mower.utils.mastery_db import get_in_progress_plan
 
             remaining_h = (completion_time - datetime.now()).total_seconds() / 3600
             if remaining_h <= 0:
                 return
+            plan = get_in_progress_plan()
+            plan_key = (
+                f"{plan['char_id']}_{plan['skill_index']}"
+                if plan is not None
+                else ""
+            )
 
             latest = player_info_cache.get("latest", {})
             training = (
                 latest.get("building_training") if isinstance(latest, dict) else None
             )
             if not training or not isinstance(training.get("trainer"), dict):
+                self._upsert_train_refresh_task(next_refresh_time)
                 return
 
             trainer_char_id = training["trainer"]["charId"]
@@ -1133,13 +1260,16 @@ class BaseSchedulerSolver(SceneGraphSolver, BaseMixin):
                 .get("name")
             )
             if not trainer_name:
+                self._upsert_train_refresh_task(next_refresh_time)
                 return
 
             if trainer_name in {"逻各斯", "艾丽妮"}:
                 logger.debug("refresh_skill_time: assistant already optimal, skip swap")
+                self._upsert_train_refresh_task(next_refresh_time)
                 return
 
             if len(self.op_data.skill_upgrade_supports) == 0:
+                self._upsert_train_refresh_task(next_refresh_time)
                 return
 
             support = next(
@@ -1151,38 +1281,62 @@ class BaseSchedulerSolver(SceneGraphSolver, BaseMixin):
                 None,
             )
             if not support or support.name == support.swap_name:
+                self._upsert_train_refresh_task(next_refresh_time)
                 return
 
             h = self.op_data.calculate_switch_time(support, hour=remaining_h)
             if h <= 0:
                 logger.info("减半换人: 剩余时间不足减半阈值，跳过")
+                self._upsert_train_refresh_task(next_refresh_time)
                 return
 
             swap_time = datetime.now() + timedelta(hours=h) - timedelta(minutes=10)
             if swap_time <= datetime.now():
+                self._upsert_train_refresh_task(next_refresh_time)
                 return
 
-            self.tasks.append(
-                SchedulerTask(
+            swap_plan = {"train": [support.swap_name, "Current"]}
+            existing_swaps = [
+                task
+                for task in self.tasks
+                if task is not self.task
+                and task.meta_data == "_mastery"
+                and (
+                    (
+                        plan_key
+                        and getattr(task, "mastery_plan_key", "") == plan_key
+                    )
+                    or (
+                        not getattr(task, "mastery_plan_key", "")
+                        and task.plan == swap_plan
+                    )
+                )
+            ]
+            if existing_swaps:
+                swap_task = min(existing_swaps, key=lambda task: task.time)
+                swap_task.time = swap_time
+                swap_task.plan = swap_plan
+                swap_task.adjusted = True
+                for duplicate in existing_swaps:
+                    if duplicate is not swap_task:
+                        self.tasks.remove(duplicate)
+            else:
+                swap_task = SchedulerTask(
                     time=swap_time,
-                    task_plan={"train": [support.swap_name, "Current"]},
+                    task_plan=swap_plan,
                     meta_data="_mastery",
                     adjusted=True,
                 )
-            )
-            self.tasks.append(
-                SchedulerTask(
-                    time=swap_time + timedelta(seconds=1),
-                    task_plan={},
-                    task_type=TaskTypes.REFRESH_TIME,
-                    meta_data="train",
-                )
-            )
+                self.tasks.append(swap_task)
+            swap_task.mastery_plan_key = plan_key
+            next_refresh_time = swap_time + timedelta(seconds=1)
+            self._upsert_train_refresh_task(next_refresh_time)
             logger.info(
                 f"减半换人: {swap_time.strftime('%H:%M')} 换上 {support.swap_name}"
             )
         except Exception as e:
             logger.debug(f"refresh_skill_time: _calculate_swap_from_api failed: {e}")
+            self._upsert_train_refresh_task(next_refresh_time)
 
     def generate_product(self, agent: str):
         """
@@ -1532,16 +1686,9 @@ class BaseSchedulerSolver(SceneGraphSolver, BaseMixin):
                             if plan_key:
                                 parts = plan_key.rsplit("_", 1)
                                 if len(parts) == 2:
-                                    from datetime import timezone
+                                    from arknights_mower.utils.mastery_db import set_plan_status
 
-                                    from arknights_mower.utils.mastery_db import (
-                                        set_plan_status,
-                                    )
-
-                                    duration = execute_time - datetime.now()
-                                    expires_at = (
-                                        datetime.now(timezone.utc) + duration
-                                    ).strftime("%Y-%m-%d %H:%M:%S")
+                                    expires_at = execute_time.strftime("%Y-%m-%d %H:%M:%S")
                                     set_plan_status(
                                         parts[0],
                                         int(parts[1]),
@@ -2017,35 +2164,6 @@ class BaseSchedulerSolver(SceneGraphSolver, BaseMixin):
             try_workshop_tasks(self.op_data, self.tasks)
         if not self.find_next_task(datetime.now() + timedelta(minutes=5)):
             try_add_release_dorm({}, None, self.op_data, self.tasks)
-        pending = []
-        try:
-            from arknights_mower.utils.mastery_db import (
-                get_pending_plans,
-                has_in_progress_plan,
-            )
-
-            if has_in_progress_plan():
-                pass
-            else:
-                pending = get_pending_plans()
-        except Exception:
-            pass
-        if pending and not self.find_next_task(task_type=TaskTypes.SKILL_UPGRADE):
-            from arknights_mower.utils.mastery_recommendation import get_skill_data
-
-            char_table = get_skill_data().get("characters", {})
-            entry = pending[0]
-            sk = str(entry["skill_index"] + 1)
-            char_info = char_table.get(entry["char_id"], {})
-            name = char_info.get("name", entry["char_id"])
-            t = SchedulerTask(
-                time=datetime.now(),
-                task_type=TaskTypes.SKILL_UPGRADE,
-                meta_data=f"{name} 技能{sk} -> 专精{entry.get('level', 1)} ",
-                adjusted=True,
-            )
-            t.plan_key = f"{entry['char_id']}_{entry['skill_index']}"
-            self.tasks.append(t)
         if self.find_next_task(datetime.now() + timedelta(seconds=15)):
             logger.info("有其他任务,跳过宿舍纠错")
             return
@@ -2893,6 +3011,18 @@ class BaseSchedulerSolver(SceneGraphSolver, BaseMixin):
         else:
             accelerate = self.find("bill_accelerate")
             while accelerate and not adjust_time:
+                if not_customize:
+                    drone_count = self.digit_reader.get_drone(self.recog.gray)
+                    logger.info(f"当前无人机数量为：{drone_count}")
+                    # 201 为识别错误；首次加速前必须先执行安全下限检查。
+                    if (
+                        drone_count < config.conf.drone_count_limit
+                        or drone_count == 201
+                    ):
+                        logger.info(
+                            f"无人机数量小于{config.conf.drone_count_limit}->停止"
+                        )
+                        break
                 logger.info("贸易站加速")
                 self.tap(accelerate)
                 self.tap_element("all_in")
@@ -2909,18 +3039,6 @@ class BaseSchedulerSolver(SceneGraphSolver, BaseMixin):
                     )
                 ):
                     break
-                if not_customize:
-                    drone_count = self.digit_reader.get_drone(self.recog.gray)
-                    logger.info(f"当前无人机数量为：{drone_count}")
-                    # 200 为识别错误
-                    if (
-                        drone_count < config.conf.drone_count_limit
-                        or drone_count == 201
-                    ):
-                        logger.info(
-                            f"无人机数量小于{config.conf.drone_count_limit}->停止"
-                        )
-                        break
                 accelerate = self.find("bill_accelerate")
             if adjust_time:
                 if merge_target is not None:
@@ -3062,14 +3180,14 @@ class BaseSchedulerSolver(SceneGraphSolver, BaseMixin):
                 logger.info(f"等待跑单 {str(wait_confirm)} 秒")
                 self.sleep(wait_confirm)
         retry_count = 0
-        while self.find("confirm_blue") and retry_count < 4:
-            self.tap_element("confirm_blue")
+        while (confirm_pos := self.find("confirm_blue")) and retry_count < 4:
+            self.tap(confirm_pos)
             self.sleep(0.5)
             self.recog.update()
             retry_count += 1
         retry_count = 0
-        while self.find("confirm_train") and retry_count < 4:
-            self.tap_element("confirm_train")
+        while (confirm_pos := self.find("confirm_train")) and retry_count < 4:
+            self.tap(confirm_pos)
             self.sleep(0.5)
             self.recog.update()
             retry_count += 1
@@ -3692,14 +3810,17 @@ class BaseSchedulerSolver(SceneGraphSolver, BaseMixin):
             self.tap((self.recog.w * 0.05, self.recog.h * 0.95), interval=0.5)
             error_count += 1
         # 订单剩余时间
-        execute_time = self.double_read_time(
+        remaining_time = self.read_time(
             (
                 (int(self.recog.w * 650 / 2496), int(self.recog.h * 660 / 1404)),
                 (int(self.recog.w * 815 / 2496), int(self.recog.h * 710 / 1404)),
             ),
+            None,
             use_digit_reader=True,
         )
-        return round((execute_time - datetime.now()).total_seconds(), 1)
+        if remaining_time is None:
+            raise Exception("订单倒计时识别失败")
+        return float(remaining_time)
 
     def current_room_changed(self, instance):
         if not self.op_data.first_init:
@@ -3864,22 +3985,42 @@ class BaseSchedulerSolver(SceneGraphSolver, BaseMixin):
                         and choose_error <= 0
                     ):
                         remaining_time = self.get_order_remaining_time()
-                        if 0 < remaining_time < (config.conf.run_order_delay + 10) * 60:
-                            if config.conf.run_order_buffer_time > 0:
-                                if getattr(self.task, "immediate", False):
-                                    logger.info("立即跑单：保留当前执行时间，跳过跑单等待")
-                                else:
-                                    self.task.time = (
-                                        datetime.now()
-                                        + timedelta(seconds=remaining_time)
-                                        - timedelta(minutes=config.conf.run_order_delay)
-                                    )
-                                    logger.info(f"订单倒计时 {remaining_time}秒")
-                                self.back()
-                                self.turn_on_room_detail(room)
+                        if getattr(self.task, "immediate", False):
+                            logger.info(
+                                f"立即跑单：订单倒计时 {remaining_time}秒，"
+                                "跳过普通跑单窗口判断"
+                            )
+                            self.back()
+                            self.turn_on_room_detail(room)
+                        elif 0 < remaining_time < (
+                            config.conf.run_order_delay + 10
+                        ) * 60:
+                            self.task.time = (
+                                datetime.now()
+                                + timedelta(seconds=remaining_time)
+                                - timedelta(minutes=config.conf.run_order_delay)
+                            )
+                            logger.info(f"订单倒计时 {remaining_time}秒")
+                            self.back()
+                            self.turn_on_room_detail(room)
                         elif self.task.adjusted:
                             self.back()
                             self.turn_on_room_detail(room)
+                        elif remaining_time >= (
+                            config.conf.run_order_delay + 10
+                        ) * 60:
+                            logger.warning(
+                                f"订单倒计时 {remaining_time}秒已超出当前跑单窗口，"
+                                "可能上一订单提前完成；尝试领取并重新计算下一单"
+                            )
+                            send_message(
+                                "检测到订单提前完成，正在领取并重新计算下一单",
+                                level="WARNING",
+                            )
+                            self.back()
+                            self.accept_order()
+                            self.reset_room_time(room)
+                            return {}
                         else:
                             logger.info("检测到漏单")
                             send_message("检测到漏单！", level="WARNING")
@@ -3961,19 +4102,27 @@ class BaseSchedulerSolver(SceneGraphSolver, BaseMixin):
     def accept_order(self):
         wait = 0
         # 等待订单完成
-        while self.find("order_ready", scope=((450, 675), (600, 750))) is None:
+        order_ready = self.find("order_ready", scope=((450, 675), (600, 750)))
+        while order_ready is None:
             if wait > 6:
-                break
+                logger.warning("等待订单完成超时，未检测到可领取订单")
+                return
             self.recog.update()
             self.sleep(0.5)
             wait += 1
-        not_take = True
-        while self.find("order_ready", scope=((450, 675), (600, 750))) is not None:
-            if not_take:
-                self.recog.save_screencap("run_order")
-                self.order_reader.save(self.recog.img)
-                not_take = False
+            order_ready = self.find(
+                "order_ready", scope=((450, 675), (600, 750))
+            )
+
+        # 复用已成功识别的画面。特征匹配包含随机采样，在同一帧上立即重复
+        # 识别也可能得到不同结果；若第二次误判为空，会跳过订单记录和领取。
+        self.recog.save_screencap("run_order")
+        self.order_reader.save(self.recog.img)
+        while order_ready is not None:
             self.tap((self.recog.w * 0.25, self.recog.h * 0.25), interval=0.5)
+            order_ready = self.find(
+                "order_ready", scope=((450, 675), (600, 750))
+            )
 
     def agent_arrange(self, plan: tp.BasePlan, get_time=False):
         logger.info("基建：排班")
@@ -4012,20 +4161,7 @@ class BaseSchedulerSolver(SceneGraphSolver, BaseMixin):
                     self.tap((self.recog.w * 0.05, self.recog.h * 0.95), interval=0.5)
                     error_count += 1
                 # 订单剩余时间
-                execute_time = self.double_read_time(
-                    (
-                        (
-                            int(self.recog.w * 650 / 2496),
-                            int(self.recog.h * 660 / 1404),
-                        ),
-                        (
-                            int(self.recog.w * 815 / 2496),
-                            int(self.recog.h * 710 / 1404),
-                        ),
-                    ),
-                    use_digit_reader=True,
-                )
-                wait_time = round((execute_time - datetime.now()).total_seconds(), 1)
+                wait_time = self.get_order_remaining_time()
                 logger.debug(f"停止{wait_time}秒等待订单完成")
                 if 0 < wait_time < config.conf.run_order_delay * 60:
                     logger.info(f"停止{wait_time}秒等待订单完成")
@@ -4064,7 +4200,7 @@ class BaseSchedulerSolver(SceneGraphSolver, BaseMixin):
                 for char in TRADE_ORDER_AGENTS
             ):
                 new_plan[run_order_room] = [
-                    data.agent for data in self.op_data.plan[room]
+                    data.agent for data in self.op_data.plan[run_order_room]
                 ]
             if config.conf.run_order_buffer_time > 0:
                 self.agent_arrange_room({}, run_order_room, new_plan, skip_enter=True)
@@ -4166,8 +4302,23 @@ class BaseSchedulerSolver(SceneGraphSolver, BaseMixin):
         #     logger.info(f"开始扫描仓库（MAA）")
         #     process_itemlist(d)
 
+    def check_maa_connectivity(self, context: str) -> None:
+        device_id = self.device.client.device_id
+        logger.info(f"{context}测试Maa连接：{device_id}")
+        result = run_maa_connectivity_check(adb=device_id)
+        if result["status"] != "success":
+            raise RuntimeError(f"{context}Maa连接测试失败：{result['message']}")
+        logger.info(f"{context}Maa连接测试通过：{result['message']}")
+
     def initialize_maa(self):
         config.stop_maa.clear()
+        if is_maa_connectivity_check_enabled():
+            # 上一个 Assistant 即使已停止任务仍保持设备连接，会让
+            # 调用前检测变成“第二条 Maa 连接”并造成误报。仅在启用
+            # 自动检测时提前释放，关闭开关时保持原有连接生命周期。
+            if getattr(self, "MAA", None) is not None:
+                self.MAA = None
+            self.check_maa_connectivity("调用前")
         conf = config.conf
         path = pathlib.Path(conf.maa_path)
         asst_path = os.path.dirname(path / "Python" / "asst")
@@ -4219,6 +4370,16 @@ class BaseSchedulerSolver(SceneGraphSolver, BaseMixin):
         else:
             logger.info("MAA 连接失败")
             raise Exception("MAA 连接失败")
+
+    def rest_after_maa(self):
+        # 自动检测开启时，休眠期间也允许手动发起独立连通性测试；
+        # 关闭时则保留原逻辑，在休眠结束后才释放 Assistant。
+        release_maa_before_rest = is_maa_connectivity_check_enabled()
+        if release_maa_before_rest:
+            self.MAA = None
+        self.rest_until_next_task()
+        if not release_maa_before_rest:
+            self.MAA = None
 
     def append_maa_task(self, type):
         if type in ["StartUp", "Visit"]:
@@ -4471,8 +4632,7 @@ class BaseSchedulerSolver(SceneGraphSolver, BaseMixin):
                     sf_solver = SecretFront(self.device, self.recog)
                     sf_solver.run(self.tasks[0].time - datetime.now())
 
-            self.rest_until_next_task()
-            self.MAA = None
+            self.rest_after_maa()
         except MowerExit:
             if self.MAA is not None:
                 self.maa_stop()
@@ -5048,7 +5208,6 @@ class BaseSchedulerSolver(SceneGraphSolver, BaseMixin):
         `sleeping` 永远和实际行为一致；以后新增休息路径也不可能再漏设标志。
         用 try/finally 保证即使被 MowerExit（点停止）打断也能复位。
         """
-        config.wake_mower.clear()
         self.sleeping = True
         try:
             csleep(remaining_time, wake_event=config.wake_mower)

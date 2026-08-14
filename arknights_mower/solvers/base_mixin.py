@@ -189,16 +189,36 @@ class BaseMixin:
                 if index >= len(agent):
                     return True
                 if name != agent[index]:
-                    return False
+                    break
                 index += 1
-            return True
+            if index == len(agent):
+                return True
+            if error_count < 2:
+                logger.debug(
+                    f"干员选择校验不一致，第{error_count + 1}次刷新截图复核"
+                )
+                self.recog.update()
+                return self.verify_agent(
+                    agent,
+                    room,
+                    error_count + 1,
+                    max_agent_count,
+                    full_scan=False,
+                    train=train,
+                )
+            return False
         except Exception as e:
             error_count += 1
             if room != "train":
                 self.switch_arrange_order("技能", room)
             if error_count < 3:
                 return self.verify_agent(
-                    agent, room, error_count, max_agent_count, full_scan=False
+                    agent,
+                    room,
+                    error_count,
+                    max_agent_count,
+                    full_scan=False,
+                    train=train,
                 )
             else:
                 logger.exception(e)
@@ -388,11 +408,17 @@ class BaseMixin:
                 if pos := self.find("control_central"):
                     _room = segment.base(self.recog.img, pos)[room]
                     self.tap(self.adjust_room(_room))
+                    if (
+                        self.find("control_central") is None
+                        and self.detect_room() == room
+                    ):
+                        return
                 elif self.detect_room() == room:
                     return
                 else:
                     self.sleep()
-            if not pos:
+            if enter_times < 2:
+                self.back_to_index()
                 self.back_to_infrastructure()
         raise Exception("未成功进入房间")
 
@@ -427,6 +453,8 @@ class BaseMixin:
         dilation = cv2.dilate(img, kernel, iterations=1)
         contours, _ = cv2.findContours(dilation, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
         rect = [cv2.boundingRect(c) for c in contours]
+        if not rect:
+            return ""
         x0 = min(x for x, y, w, h in rect)
         y0 = min(y for x, y, w, h in rect)
         x1 = max(x + w for x, y, w, h in rect)

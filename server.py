@@ -7,9 +7,8 @@ import subprocess
 import time
 from functools import wraps
 from io import BytesIO
-from threading import Lock, Thread
+from threading import Lock, RLock, Thread
 
-import pytz
 from flask import Flask, abort, request, send_file, send_from_directory
 from flask_cors import CORS
 from flask_sock import Sock
@@ -66,43 +65,45 @@ maa_check_job = {
     "message": "",
     "started_at": None,
 }
+maa_check_lock = RLock()
 
 
 def _collect_maa_check_result():
-    process = maa_check_job.get("process")
-    if process is None:
-        return
+    with maa_check_lock:
+        process = maa_check_job.get("process")
+        if process is None:
+            return
 
-    if process.poll() is None:
-        started_at = maa_check_job.get("started_at")
-        if started_at and time.monotonic() - started_at > MAA_CHECK_TIMEOUT:
-            process.kill()
-            try:
-                process.communicate(timeout=1)
-            except Exception:
-                pass
-            result = maa_check_timeout_result(MAA_CHECK_TIMEOUT)
-            maa_check_job.update(
-                {
-                    "process": None,
-                    "status": result["status"],
-                    "message": result["message"],
-                    "started_at": None,
-                }
-            )
-        return
+        if process.poll() is None:
+            started_at = maa_check_job.get("started_at")
+            if started_at and time.monotonic() - started_at > MAA_CHECK_TIMEOUT:
+                process.kill()
+                try:
+                    process.communicate(timeout=1)
+                except Exception:
+                    pass
+                result = maa_check_timeout_result(MAA_CHECK_TIMEOUT)
+                maa_check_job.update(
+                    {
+                        "process": None,
+                        "status": result["status"],
+                        "message": result["message"],
+                        "started_at": None,
+                    }
+                )
+            return
 
-    stdout, stderr = process.communicate()
-    result = parse_maa_check_output(stdout, stderr, process.returncode)
+        stdout, stderr = process.communicate()
+        result = parse_maa_check_output(stdout, stderr, process.returncode)
 
-    maa_check_job.update(
-        {
-            "process": None,
-            "status": result["status"],
-            "message": result["message"],
-            "started_at": None,
-        }
-    )
+        maa_check_job.update(
+            {
+                "process": None,
+                "status": result["status"],
+                "message": result["message"],
+                "started_at": None,
+            }
+        )
 
 
 def read_log():
@@ -113,15 +114,19 @@ def read_log():
         msg = config.log_queue.get()
         log_lines.append(msg)
         log_lines = log_lines[-100:]
-        for ws in ws_connections:
-            ws.send(
-                json.dumps(
-                    {"type": "log", "data": msg, "screenshot": get_latest_screenshot()}
-                )
-            )
+        _broadcast_log(msg)
 
 
-Thread(target=read_log, daemon=True).start()
+def _broadcast_log(msg):
+    payload = json.dumps(
+        {"type": "log", "data": msg, "screenshot": get_latest_screenshot()}
+    )
+    for ws in ws_connections.copy():
+        try:
+            ws.send(payload)
+        except Exception:
+            if ws in ws_connections:
+                ws_connections.remove(ws)
 
 
 def require_token(f):
@@ -149,6 +154,60 @@ def not_found(e):
     return send_from_directory("ui/dist", "index.html")
 
 
+def _free_dorm_positions(plan):
+    """Return dynamic dorm beds in the same stable order used by Operators."""
+    first_free = []
+    remaining_free = []
+    for room_name in (
+        "dormitory_1",
+        "dormitory_2",
+        "dormitory_3",
+        "dormitory_4",
+    ):
+        facility = getattr(plan.plan1, room_name, None)
+        if facility is None:
+            continue
+        positions = [
+            f"{room_name}_{idx}"
+            for idx, slot in enumerate(facility.plans)
+            if slot.agent == "Free"
+        ]
+        if positions:
+            first_free.append(positions[0])
+            remaining_free.extend(positions[1:])
+    return first_free + remaining_free
+
+
+def _reconcile_dorm_order(plan, requested_order, fallback_order=""):
+    """Keep a valid requested/current order, otherwise rebuild from the plan."""
+    positions = _free_dorm_positions(plan)
+    for candidate in (requested_order, fallback_order):
+        requested = [
+            item.strip()
+            for item in (candidate or "").split(",")
+            if item.strip()
+        ]
+        if (
+            len(requested) == len(set(requested))
+            and set(requested) == set(positions)
+        ):
+            return ",".join(requested)
+    return ",".join(positions)
+
+
+def _save_plan_with_dorm_order(new_plan):
+    normalized = _reconcile_dorm_order(new_plan, config.conf.dorm_order)
+    changed = normalized != config.conf.dorm_order
+    config.plan = new_plan
+    config.save_plan()
+    if changed:
+        logger.warning(
+            "dorm_order did not match the saved plan topology; rebuilt safely"
+        )
+        config.conf.dorm_order = normalized
+        config.save_conf()
+
+
 @app.route("/conf", methods=["GET", "POST"])
 @require_token
 def load_config():
@@ -172,6 +231,17 @@ def load_config():
         req["maa_weekly_plan"] = [
             item.model_dump() for item in config.conf.maa_weekly_plan
         ]
+        requested_dorm_order = req.get("dorm_order", config.conf.dorm_order)
+        req["dorm_order"] = _reconcile_dorm_order(
+            config.plan,
+            requested_dorm_order,
+            config.conf.dorm_order,
+        )
+        if req["dorm_order"] != requested_dorm_order:
+            logger.warning(
+                "Rejected dorm_order that did not match the current plan topology; "
+                "using a safe order"
+            )
         config.conf = config.Conf(**req)
         config.save_conf()
         return "New config saved!"
@@ -183,8 +253,7 @@ def load_plan_from_json():
     if request.method == "GET":
         return config.plan.model_dump(exclude_none=True)
     else:
-        config.plan = config.PlanModel(**request.json)
-        config.save_plan()
+        _save_plan_with_dorm_order(config.PlanModel(**request.json))
         return "New plan saved。"
 
 
@@ -350,7 +419,8 @@ def log(ws):
         while True:
             ws.receive()
     except ConnectionClosed:
-        ws_connections.remove(ws)
+        if ws in ws_connections:
+            ws_connections.remove(ws)
 
 
 @app.route("/screenshots/<path:filename>")
@@ -415,8 +485,7 @@ def import_from_image():
             logger.exception(msg)
             return msg
     if data:
-        config.plan = config.PlanModel(**data)
-        config.save_plan()
+        _save_plan_with_dorm_order(config.PlanModel(**data))
         return "排班已加载"
     else:
         return "排班表导入失败！"
@@ -491,30 +560,41 @@ def validate_backup_plans_route():
 @app.route("/check-maa")
 @require_token
 def get_maa_adb_version():
-    _collect_maa_check_result()
-    if maa_check_job["status"] == "running":
-        return {
-            "status": "running",
-            "message": maa_check_job["message"] or "正在测试……",
-        }
+    with maa_check_lock:
+        _collect_maa_check_result()
+        if maa_check_job["status"] == "running":
+            return {
+                "status": "running",
+                "message": maa_check_job["message"] or "正在测试……",
+            }
 
-    process = subprocess.Popen(
-        maa_check_command(),
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        creationflags=subprocess.CREATE_NO_WINDOW if __system__ == "windows" else 0,
-    )
-    maa_check_job.update(
-        {
-            "id": time.time_ns(),
-            "process": process,
-            "status": "running",
-            "message": "正在测试……",
-            "started_at": time.monotonic(),
-        }
-    )
-    return {"status": "running", "message": "正在测试……"}
+        try:
+            process = subprocess.Popen(
+                maa_check_command(),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                close_fds=False,
+                creationflags=(
+                    subprocess.CREATE_NO_WINDOW if __system__ == "windows" else 0
+                ),
+            )
+        except Exception as e:
+            logger.exception(e)
+            return {
+                "status": "error",
+                "message": f"Maa测试启动失败：{e}",
+            }
+        maa_check_job.update(
+            {
+                "id": time.time_ns(),
+                "process": process,
+                "status": "running",
+                "message": "正在测试……",
+                "started_at": time.monotonic(),
+            }
+        )
+        return {"status": "running", "message": "正在测试……"}
 
 
 @app.route("/check-maa/status")
@@ -536,7 +616,7 @@ def get_maa_conn_presets():
             "r",
             encoding="utf-8",
         ) as f:
-            presets = [i["configName"] for i in json.load(f)["connection"]]
+            presets = [item["configName"] for item in json.load(f)["connection"]]
     except Exception as e:
         logger.exception(e)
         presets = []
@@ -1116,7 +1196,11 @@ def cultivate_fetch():
 def add_task():
     from arknights_mower.__main__ import base_scheduler
     from arknights_mower.utils.mastery_db import get_route, has_train_group_plan
-    from arknights_mower.utils.scheduler_task import SchedulerTask, TaskTypes
+    from arknights_mower.utils.scheduler_task import (
+        SchedulerTask,
+        TaskTypes,
+        parse_scheduler_task_time,
+    )
 
     if request.method == "POST":
         try:
@@ -1127,13 +1211,8 @@ def add_task():
                 # if not base_scheduler.sleeping:
                 #     raise Exception("只能在休息时间添加")
                 if task:
-                    utc_time = datetime.datetime.strptime(
-                        task["time"], "%Y-%m-%dT%H:%M:%S.%f%z"
-                    )
-                    task_time = (
-                        utc_time.replace(tzinfo=pytz.utc)
-                        .astimezone(get_localzone())
-                        .replace(tzinfo=None)
+                    task_time = parse_scheduler_task_time(
+                        task["time"], get_localzone()
                     )
                     new_task = SchedulerTask(
                         time=task_time,
@@ -1185,6 +1264,8 @@ def add_task():
                         base_scheduler.op_data.skill_upgrade_supports = supports
                         logger.info(f"从数据库加载 {prof_cn} 专精路线完毕")
                     base_scheduler.tasks.append(new_task)
+                    base_scheduler.tasks.sort(key=lambda item: item.time)
+                    config.wake_mower.set()
                     logger.debug(f"成功：{str(new_task)}")
                     return "添加任务成功！"
             raise Exception("添加任务失败！！请确保Mower正在运行")
@@ -1209,6 +1290,7 @@ def add_task():
 
 
 @app.route("/run-order/immediate", methods=["POST"])
+@require_token
 def immediate_run_order():
     from arknights_mower.__main__ import base_scheduler
     from arknights_mower.utils.scheduler_task import (
@@ -1260,7 +1342,7 @@ def immediate_run_order():
             config.wake_mower.set()
         logger.info(
             f"收到立即跑单请求：将{target.meta_data}的跑单从"
-            f"{original_time.strftime('%H:%M:%S')}提前到当前执行"
+            f"{original_time.strftime('%H:%M:%S')}提前执行"
         )
         return {
             "success": True,
@@ -1274,6 +1356,7 @@ def immediate_run_order():
 
 
 @app.route("/run-order/defer-preceding-tasks", methods=["POST"])
+@require_token
 def defer_tasks_before_run_order():
     from arknights_mower.__main__ import base_scheduler
     from arknights_mower.utils.scheduler_task import (
@@ -1427,3 +1510,4 @@ def ws_chat(ws):
 
 
 app.register_blueprint(mastery_bp)
+Thread(target=read_log, daemon=True).start()

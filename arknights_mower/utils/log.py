@@ -3,7 +3,6 @@ import os
 import shutil
 import sys
 import time
-import traceback
 from datetime import datetime, timedelta
 from logging.handlers import QueueHandler, QueueListener, TimedRotatingFileHandler
 from pathlib import Path
@@ -22,6 +21,27 @@ COLOR_FORMAT = f"%(log_color)s{BASIC_FORMAT}"
 DATE_FORMAT = None
 basic_formatter = logging.Formatter(BASIC_FORMAT, DATE_FORMAT)
 color_formatter = colorlog.ColoredFormatter(COLOR_FORMAT, DATE_FORMAT)
+web_formatter = logging.Formatter(
+    "%(asctime)s %(levelname)s %(message)s", DATE_FORMAT
+)
+
+
+class EncodingSafeStream:
+    """Escape characters unsupported by a terminal without losing the log line."""
+
+    def __init__(self, stream):
+        self.stream = stream
+
+    def write(self, message):
+        encoding = getattr(self.stream, "encoding", None)
+        if encoding:
+            message = message.encode(encoding, errors="backslashreplace").decode(
+                encoding
+            )
+        return self.stream.write(message)
+
+    def __getattr__(self, name):
+        return getattr(self.stream, name)
 
 
 def _is_flask_reloader_parent() -> bool:
@@ -50,7 +70,7 @@ logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
 
 # d(ebug)hlr: 终端输出
-dhlr = logging.StreamHandler(stream=sys.stdout)
+dhlr = logging.StreamHandler(stream=EncodingSafeStream(sys.stdout))
 dhlr.setFormatter(color_formatter)
 dhlr.setLevel(logging.DEBUG)
 dhlr.addFilter(filter)
@@ -60,11 +80,12 @@ fhlr = None
 
 
 class Handler(logging.StreamHandler):
+    def __init__(self):
+        super().__init__()
+        self.setFormatter(web_formatter)
+
     def emit(self, record: logging.LogRecord):
-        msg = f"{record.asctime} {record.levelname} {record.message}"
-        if record.exc_info:
-            msg += "\n" + "".join(traceback.format_exception(*record.exc_info))
-        config.log_queue.put(msg)
+        config.log_queue.put(self.format(record))
 
 
 # w(ebsocket)hlr: WebSocket

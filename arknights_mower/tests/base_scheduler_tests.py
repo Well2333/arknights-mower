@@ -3,10 +3,11 @@ from datetime import datetime, timedelta
 from unittest.mock import MagicMock, patch
 
 import arknights_mower.solvers.base_schedule as base_schedule
+import arknights_mower.solvers.base_mixin as base_mixin
 from arknights_mower.solvers.base_schedule import BaseSchedulerSolver
 from arknights_mower.utils.logic_expression import LogicExpression
-from arknights_mower.utils.operators import Operator
-from arknights_mower.utils.plan import Plan, PlanConfig, Room
+from arknights_mower.utils.operators import Dormitory, Operator
+from arknights_mower.utils.plan import Plan, PlanConfig, PlanTriggerTiming, Room
 from arknights_mower.utils.recognize import Scene
 from arknights_mower.utils.scheduler_task import (
     SchedulerTask,
@@ -19,6 +20,40 @@ with patch.dict("sys.modules", {"RecruitSolver": MagicMock()}):
 
 
 class TestBaseScheduler(unittest.TestCase):
+    @patch.object(BaseSchedulerSolver, "__init__", lambda x: None)
+    def test_verify_agent_recovers_after_transient_mismatch(self):
+        solver = BaseSchedulerSolver()
+        solver.recog = MagicMock()
+        solver.find = MagicMock(return_value=None)
+
+        with patch.object(
+            base_mixin,
+            "operator_list",
+            side_effect=[[["错误干员", None]], [["目标干员", None]]],
+        ) as recognize:
+            result = solver.verify_agent(["目标干员"], "dormitory_1")
+
+        self.assertTrue(result)
+        self.assertEqual(recognize.call_count, 2)
+        solver.recog.update.assert_called_once_with()
+
+    @patch.object(BaseSchedulerSolver, "__init__", lambda x: None)
+    def test_verify_agent_rejects_persistent_mismatch_or_empty_result(self):
+        solver = BaseSchedulerSolver()
+        solver.recog = MagicMock()
+        solver.find = MagicMock(return_value=None)
+
+        with patch.object(
+            base_mixin,
+            "operator_list",
+            side_effect=[[["错误干员", None]], [], [["错误干员", None]]],
+        ) as recognize:
+            result = solver.verify_agent(["目标干员"], "dormitory_1")
+
+        self.assertFalse(result)
+        self.assertEqual(recognize.call_count, 3)
+        self.assertEqual(solver.recog.update.call_count, 2)
+
     @patch.object(BaseSchedulerSolver, "__init__", lambda x: None)
     def test_run_order_solver_uses_current_time_for_expired_exhaust_task(self):
         solver = BaseSchedulerSolver()
@@ -315,7 +350,140 @@ class TestBaseScheduler(unittest.TestCase):
         self.assertEqual([item["agent"] for item in result], ["", ""])
 
     @patch.object(BaseSchedulerSolver, "__init__", lambda x: None)
-    def test_immediate_run_order_forces_drone_after_arrange(self):
+    def test_tap_confirm_reuses_first_match_position(self):
+        solver = BaseSchedulerSolver()
+        solver.task = SchedulerTask(task_type=TaskTypes.SHIFT_ON)
+        solver.op_data = MagicMock()
+        solver.op_data.run_order_rooms = {}
+        solver.recog = MagicMock()
+        solver.find = MagicMock(side_effect=[(10, 20), None, None, None])
+        solver.sleep = MagicMock()
+        solver.tap = MagicMock()
+        solver.tap_element = MagicMock()
+
+        solver.tap_confirm("room_1_1")
+
+        solver.tap.assert_called_once_with((10, 20))
+        solver.tap_element.assert_not_called()
+
+    @patch.object(BaseSchedulerSolver, "__init__", lambda x: None)
+    def test_accept_order_reuses_successful_detection_for_save_and_tap(self):
+        solver = BaseSchedulerSolver()
+        solver.recog = MagicMock(w=1920, h=1080)
+        solver.order_reader = MagicMock()
+        solver.find = MagicMock(side_effect=[(500, 675), None])
+        solver.tap = MagicMock()
+
+        solver.accept_order()
+
+        self.assertEqual(solver.find.call_count, 2)
+        solver.recog.save_screencap.assert_called_once_with("run_order")
+        solver.order_reader.save.assert_called_once_with(solver.recog.img)
+        solver.tap.assert_called_once_with((480.0, 270.0), interval=0.5)
+
+    @patch.object(BaseSchedulerSolver, "__init__", lambda x: None)
+    def test_accept_order_timeout_does_not_save_or_tap(self):
+        solver = BaseSchedulerSolver()
+        solver.recog = MagicMock(w=1920, h=1080)
+        solver.order_reader = MagicMock()
+        solver.find = MagicMock(return_value=None)
+        solver.tap = MagicMock()
+        solver.sleep = MagicMock()
+
+        solver.accept_order()
+
+        self.assertEqual(solver.find.call_count, 8)
+        self.assertEqual(solver.recog.update.call_count, 7)
+        solver.recog.save_screencap.assert_not_called()
+        solver.order_reader.save.assert_not_called()
+        solver.tap.assert_not_called()
+
+    @patch.object(BaseSchedulerSolver, "__init__", lambda x: None)
+    def test_run_order_with_next_order_timer_collects_and_replans(self):
+        solver = BaseSchedulerSolver()
+        solver.task = SchedulerTask(task_type=TaskTypes.RUN_ORDER)
+        solver.task.adjusted = False
+        solver.op_data = MagicMock()
+        solver.op_data.run_order_rooms = {"room_1_1": []}
+        solver.op_data.get_current_room.return_value = ["CurrentAgent"]
+        solver.turn_on_room_detail = MagicMock()
+        solver.get_order_remaining_time = MagicMock(return_value=3 * 60 * 60)
+        solver.back = MagicMock()
+        solver.accept_order = MagicMock()
+        solver.reset_room_time = MagicMock()
+
+        with (
+            patch.object(
+                base_schedule.config.conf.run_order_grandet_mode,
+                "buffer_time",
+                15,
+            ),
+            patch.object(base_schedule.config.conf, "run_order_delay", 5),
+            patch.object(base_schedule, "send_message"),
+        ):
+            result = solver.agent_arrange_room(
+                {"room_1_1": ["CurrentAgent"]},
+                "room_1_1",
+                {"room_1_1": ["RunOrderAgent"]},
+                skip_enter=True,
+            )
+
+        self.assertEqual(result, {})
+        solver.back.assert_called_once_with()
+        solver.accept_order.assert_called_once_with()
+        solver.reset_room_time.assert_called_once_with("room_1_1")
+
+    @patch.object(BaseSchedulerSolver, "__init__", lambda x: None)
+    def test_immediate_run_order_long_timer_reaches_arrangement(self):
+        solver = BaseSchedulerSolver()
+        solver.task = SchedulerTask(
+            task_type=TaskTypes.RUN_ORDER,
+            immediate=True,
+            meta_data="room_1_1",
+        )
+        solver.op_data = MagicMock()
+        solver.op_data.run_order_rooms = {"room_1_1": []}
+        solver.op_data.get_current_room.return_value = ["CurrentAgent"]
+        solver.turn_on_room_detail = MagicMock()
+        solver.get_order_remaining_time = MagicMock(return_value=1088)
+        solver.back = MagicMock()
+        solver.accept_order = MagicMock()
+        solver.reset_room_time = MagicMock()
+        solver.find = MagicMock(return_value=(100, 100))
+        solver.choose_agent = MagicMock()
+        solver.tap_confirm = MagicMock()
+        solver.get_agent_from_room = MagicMock(
+            return_value=[{"agent": "RunOrderAgent"}]
+        )
+        solver.scene = MagicMock(return_value=Scene.INFRA_MAIN)
+        solver.waiting_scene = set()
+
+        with (
+            patch.object(
+                base_schedule.config.conf.run_order_grandet_mode,
+                "buffer_time",
+                180,
+            ),
+            patch.object(base_schedule.config.conf, "run_order_delay", 8),
+            patch.object(base_schedule, "send_message") as mock_send_message,
+        ):
+            result = solver.agent_arrange_room(
+                {"room_1_1": ["CurrentAgent"]},
+                "room_1_1",
+                {"room_1_1": ["RunOrderAgent"]},
+                skip_enter=True,
+            )
+
+        self.assertEqual(result, {"room_1_1": ["CurrentAgent"]})
+        solver.choose_agent.assert_called_once_with(
+            ["RunOrderAgent"], "room_1_1", True
+        )
+        solver.accept_order.assert_not_called()
+        solver.reset_room_time.assert_not_called()
+        mock_send_message.assert_not_called()
+
+    @patch.object(BaseSchedulerSolver, "__init__", lambda x: None)
+    def test_immediate_run_order_forces_drone_for_trade_room(self):
         solver = BaseSchedulerSolver()
         solver.task = SchedulerTask(
             task_type=TaskTypes.RUN_ORDER,
@@ -324,6 +492,9 @@ class TestBaseScheduler(unittest.TestCase):
         )
         solver.tasks = []
         solver.find = MagicMock(return_value=None)
+        solver.op_data = MagicMock()
+        solver.op_data.run_order_rooms = {"room_1_1": []}
+        solver.op_data.plan = {"room_1_1": []}
         arranged = {"room_1_1": ["Current"]}
 
         with (
@@ -333,7 +504,11 @@ class TestBaseScheduler(unittest.TestCase):
                 return_value=arranged,
             ),
             patch.object(BaseSchedulerSolver, "drone") as mock_drone,
-            patch.object(base_schedule.config.conf, "run_order_buffer_time", 1),
+            patch.object(
+                base_schedule.config.conf.run_order_grandet_mode,
+                "buffer_time",
+                1,
+            ),
         ):
             solver.agent_arrange(
                 {
@@ -345,7 +520,7 @@ class TestBaseScheduler(unittest.TestCase):
         mock_drone.assert_called_once_with("room_1_1", not_customize=True)
 
     @patch.object(BaseSchedulerSolver, "__init__", lambda x: None)
-    def test_immediate_run_order_does_not_wait_before_confirm(self):
+    def test_immediate_run_order_skips_confirmation_wait(self):
         solver = BaseSchedulerSolver()
         solver.task = SchedulerTask(task_type=TaskTypes.RUN_ORDER, immediate=True)
         solver.op_data = MagicMock()
@@ -353,15 +528,32 @@ class TestBaseScheduler(unittest.TestCase):
         solver.recog = MagicMock()
         solver.find = MagicMock(return_value=None)
         solver.sleep = MagicMock()
-        solver.tap = MagicMock()
 
         with (
-            patch.object(base_schedule.config.conf, "run_order_buffer_time", 15),
+            patch.object(
+                base_schedule.config.conf.run_order_grandet_mode,
+                "buffer_time",
+                15,
+            ),
             patch.object(base_schedule.config.conf, "run_order_delay", 3),
         ):
             solver.tap_confirm("room_1_1", {"room_1_1": ["Current"]})
 
         solver.sleep.assert_not_called()
+
+    @patch.object(BaseSchedulerSolver, "__init__", lambda x: None)
+    def test_idle_sleep_wake_event_reselects_task_and_clears_state(self):
+        solver = BaseSchedulerSolver()
+        solver.sleeping = False
+        solver.recog = MagicMock()
+        base_schedule.config.wake_mower.set()
+
+        woke = solver._idle_sleep(30)
+
+        self.assertTrue(woke)
+        self.assertFalse(solver.sleeping)
+        self.assertFalse(base_schedule.config.wake_mower.is_set())
+        solver.recog.update.assert_called_once_with()
 
     @patch.object(BaseSchedulerSolver, "__init__", lambda x: None)
     def test_infra_main_requests_restart_after_mood_read(self):
@@ -440,6 +632,648 @@ class TestBaseScheduler(unittest.TestCase):
             any(task.type == TaskTypes.SELF_CORRECTION for task in solver.tasks)
         )
 
+    @patch.object(BaseSchedulerSolver, "__init__", lambda x: None)
+    def test_plan_solver_leaves_pending_mastery_to_mastery_sync(self):
+        solver = BaseSchedulerSolver()
+        solver.op_data = MagicMock()
+        solver.op_data.operators = {}
+        solver.op_data.print.return_value = ""
+        solver.tasks = []
+        solver.find_next_task = MagicMock(return_value=None)
+        solver.plan_metadata = MagicMock()
+        solver.resting = MagicMock(return_value={})
+        solver.agent_get_mood = MagicMock(return_value="noop")
+        solver.backup_plan_solver = MagicMock()
+
+        with (
+            patch.object(base_schedule, "try_reorder", return_value={}),
+            patch.object(base_schedule, "try_workshop_tasks"),
+            patch.object(base_schedule, "try_add_release_dorm"),
+            patch(
+                "arknights_mower.utils.mastery_db.get_pending_plans",
+                return_value=[{"char_id": "char_test", "skill_index": 1}],
+            ) as mock_get_pending,
+            patch(
+                "arknights_mower.utils.mastery_db.has_in_progress_plan",
+                return_value=False,
+            ) as mock_has_in_progress,
+        ):
+            solver.plan_solver()
+
+        self.assertFalse(
+            any(task.type == TaskTypes.SKILL_UPGRADE for task in solver.tasks)
+        )
+        mock_get_pending.assert_not_called()
+        mock_has_in_progress.assert_not_called()
+        solver.backup_plan_solver.assert_not_called()
+
+
+class TestSchedulerStability(unittest.TestCase):
+    def _make_fia_solver(self, grouped):
+        now = datetime(2026, 7, 21, 10, 0)
+        solver = BaseSchedulerSolver.__new__(BaseSchedulerSolver)
+        solver.task = SchedulerTask(time=now)
+        group = "test_group" if grouped else ""
+        target = Operator(
+            "Target",
+            "central",
+            index=0,
+            group=group,
+            current_room="dormitory_1",
+            current_index=0,
+            mood=1,
+            upper_limit=24,
+            lower_limit=0,
+            operator_type="high",
+            time_stamp=now,
+        )
+        other = Operator(
+            "Other",
+            "room_1_1",
+            index=0,
+            group=group,
+            current_room="room_1_1",
+            current_index=0,
+            mood=20,
+            operator_type="high",
+            time_stamp=now,
+        )
+        solver.op_data = MagicMock()
+        solver.op_data.operators = {"Target": target, "Other": other}
+        solver.op_data.groups = {group: ["Target", "Other"]} if grouped else {}
+        shift = SchedulerTask(
+            time=now + timedelta(hours=2),
+            task_plan={"central": ["Target"]},
+            task_type=TaskTypes.SHIFT_ON,
+        )
+        solver.tasks = [shift]
+        return solver, shift, now
+
+    @patch.object(BaseSchedulerSolver, "check_fia")
+    def test_plan_fia_does_not_advance_group_shift_on(self, check_fia):
+        solver, shift, now = self._make_fia_solver(grouped=True)
+        check_fia.return_value = (["Target"], "dormitory_1")
+
+        with patch.object(base_schedule.config.conf, "fia_fool", True):
+            solver.plan_fia()
+
+        self.assertEqual(shift.time, now + timedelta(hours=2))
+        self.assertTrue(
+            any(task.type == TaskTypes.FIAMMETTA for task in solver.tasks)
+        )
+
+    @patch.object(BaseSchedulerSolver, "check_fia")
+    def test_plan_fia_still_advances_ungrouped_shift_on(self, check_fia):
+        solver, shift, now = self._make_fia_solver(grouped=False)
+        check_fia.return_value = (["Target"], "dormitory_1")
+
+        with patch.object(base_schedule.config.conf, "fia_fool", True):
+            solver.plan_fia()
+
+        self.assertEqual(shift.time, now + timedelta(seconds=1))
+        self.assertTrue(
+            any(task.type == TaskTypes.FIAMMETTA for task in solver.tasks)
+        )
+
+
+    @patch.object(BaseSchedulerSolver, "__init__", lambda x: None)
+    def test_readiness_retry_scans_dorm_without_arranging(self):
+        solver = BaseSchedulerSolver()
+        retry = SchedulerTask(
+            task_plan={},
+            task_type=TaskTypes.NOT_SPECIFIC,
+            meta_data="shift_on_readiness_retry:Resting",
+        )
+        solver.task = retry
+        solver.tasks = [retry]
+        solver.op_data = MagicMock()
+        solver.op_data.operators = {
+            "Resting": Operator(
+                "Resting",
+                "central",
+                group="group",
+                current_room="",
+                current_index=0,
+                mood=10,
+                operator_type="high",
+            )
+        }
+        solver.op_data.dorm = [
+            Dormitory(("dormitory_2", 0), "Resting", None)
+        ]
+        shift = SchedulerTask(
+            time=datetime.now() + timedelta(hours=1),
+            task_plan={"central": ["Resting"]},
+            task_type=TaskTypes.SHIFT_ON,
+        )
+
+        with (
+            patch.object(BaseSchedulerSolver, "find", return_value=True),
+            patch.object(BaseSchedulerSolver, "enter_room") as enter_room,
+            patch.object(BaseSchedulerSolver, "get_agent_from_room") as read_room,
+            patch.object(BaseSchedulerSolver, "back") as back,
+            patch.object(
+                BaseSchedulerSolver,
+                "plan_metadata",
+                side_effect=lambda: solver.tasks.append(shift),
+            ) as replan,
+            patch.object(BaseSchedulerSolver, "backup_plan_solver") as backup,
+            patch.object(BaseSchedulerSolver, "agent_arrange") as arrange,
+        ):
+            solver.infra_main()
+
+        enter_room.assert_called_once_with("dormitory_2")
+        read_room.assert_called_once_with("dormitory_2")
+        back.assert_called_once_with()
+        arrange.assert_not_called()
+        replan.assert_called_once_with()
+        backup.assert_called_once_with(PlanTriggerTiming.AFTER_PLANNING)
+        self.assertEqual(solver.tasks, [shift])
+        self.assertIsNone(solver.task)
+
+    @patch.object(BaseSchedulerSolver, "__init__", lambda x: None)
+    def test_readiness_retry_failure_replaces_expired_task_with_future_retry(self):
+        solver = BaseSchedulerSolver()
+        now = datetime.now()
+        retry = SchedulerTask(
+            time=now - timedelta(minutes=1),
+            task_plan={},
+            task_type=TaskTypes.NOT_SPECIFIC,
+            meta_data="shift_on_readiness_retry:Resting",
+        )
+        future_retry = SchedulerTask(
+            time=now + timedelta(minutes=10),
+            task_plan={},
+            task_type=TaskTypes.NOT_SPECIFIC,
+            meta_data="shift_on_readiness_retry:Resting",
+        )
+        solver.task = retry
+        solver.tasks = [retry]
+        solver.error = False
+        solver.op_data = MagicMock()
+        solver.op_data.operators = {
+            "Resting": Operator(
+                "Resting",
+                "central",
+                group="group",
+                current_room="dormitory_2",
+                current_index=0,
+                mood=10,
+                operator_type="high",
+            )
+        }
+        solver.op_data.dorm = [
+            Dormitory(("dormitory_2", 0), "Resting", None)
+        ]
+
+        with (
+            patch.object(BaseSchedulerSolver, "find", return_value=True),
+            patch.object(BaseSchedulerSolver, "enter_room"),
+            patch.object(
+                BaseSchedulerSolver,
+                "get_agent_from_room",
+                side_effect=RuntimeError("ocr failed"),
+            ),
+            patch.object(BaseSchedulerSolver, "back") as back,
+            patch.object(
+                BaseSchedulerSolver,
+                "plan_metadata",
+                side_effect=lambda: solver.tasks.append(future_retry),
+            ) as replan,
+        ):
+            solver.infra_main()
+
+        back.assert_called_once_with()
+        replan.assert_called_once_with()
+        self.assertNotIn(retry, solver.tasks)
+        self.assertEqual(solver.tasks, [future_retry])
+        self.assertGreater(future_retry.time, now)
+        self.assertTrue(solver.error)
+        self.assertIsNone(solver.task)
+
+    def _make_correction_safety_solver(self, include_ordinary_mismatch):
+        now = datetime.now()
+        resting = Operator(
+            "Resting",
+            "central",
+            index=0,
+            group="group",
+            current_room="dormitory_1",
+            current_index=0,
+            mood=10,
+            operator_type="high",
+            time_stamp=now,
+        )
+        unknown = Operator(
+            "Unknown",
+            "room_1_1",
+            index=0,
+            group="group",
+            current_room="",
+            current_index=-1,
+            mood=10,
+            operator_type="high",
+            time_stamp=now,
+        )
+        operators = {"Resting": resting, "Unknown": unknown}
+        plan = {
+            "central": [Room("Resting", "group", [])],
+            "room_1_1": [Room("Unknown", "group", [])],
+        }
+        current = {"central": [""], "room_1_1": [""]}
+        if include_ordinary_mismatch:
+            ordinary = Operator(
+                "Expected",
+                "meeting",
+                index=0,
+                current_room="",
+                current_index=-1,
+                mood=10,
+                operator_type="high",
+                time_stamp=now,
+            )
+            operators["Expected"] = ordinary
+            plan["meeting"] = [Room("Expected", "", [])]
+            current["meeting"] = ["Other"]
+
+        solver = BaseSchedulerSolver.__new__(BaseSchedulerSolver)
+        solver.tasks = []
+        solver.op_data = MagicMock()
+        solver.op_data.operators = operators
+        solver.op_data.groups = {"group": ["Resting", "Unknown"]}
+        solver.op_data.plan = plan
+        solver.op_data.true_exhaust_room = set()
+        solver.op_data.get_current_room.side_effect = (
+            lambda room, _bypass: current[room]
+        )
+        return solver
+
+    def test_self_correction_keeps_other_fix_but_blocks_resting_and_unknown_group(self):
+        solver = self._make_correction_safety_solver(True)
+
+        result = solver.agent_get_mood(skip_dorm=True)
+
+        self.assertEqual(result, "self_correction")
+        self.assertEqual(len(solver.tasks), 1)
+        self.assertEqual(solver.tasks[0].type, TaskTypes.SELF_CORRECTION)
+        self.assertEqual(solver.tasks[0].plan, {"meeting": ["Expected"]})
+
+    def test_self_correction_is_not_created_when_only_protected_group_remains(self):
+        solver = self._make_correction_safety_solver(False)
+
+        result = solver.agent_get_mood(skip_dorm=True)
+
+        self.assertIsNone(result)
+        self.assertEqual(solver.tasks, [])
+
+    def test_self_correction_accepts_replacement_for_off_duty_ungrouped_high(self):
+        now = datetime.now()
+        ash = Operator(
+            "灰烬",
+            "room_2_2",
+            index=1,
+            replacement=["赤刃明霄陈"],
+            current_room="",
+            current_index=-1,
+            mood=9.523,
+            operator_type="high",
+            time_stamp=now,
+        )
+        chen = Operator(
+            "赤刃明霄陈",
+            "",
+            current_room="room_2_2",
+            current_index=1,
+            mood=24,
+            operator_type="low",
+            time_stamp=now,
+        )
+        solver = BaseSchedulerSolver.__new__(BaseSchedulerSolver)
+        solver.tasks = []
+        solver.op_data = MagicMock()
+        solver.op_data.operators = {"灰烬": ash, "赤刃明霄陈": chen}
+        solver.op_data.groups = {}
+        solver.op_data.plan = {
+            "room_2_2": [
+                Room("凯尔希", "", ["荒芜拉普兰德", "多萝西"]),
+                Room("灰烬", "", ["赤刃明霄陈"]),
+            ]
+        }
+        solver.op_data.true_exhaust_room = set()
+        solver.op_data.get_current_room.return_value = ["多萝西", "赤刃明霄陈"]
+
+        result = solver.agent_get_mood(skip_dorm=True)
+
+        self.assertIsNone(result)
+        self.assertEqual(solver.tasks, [])
+
+class TestMasteryAndDroneHardening(unittest.TestCase):
+    def test_mastery_sync_twice_keeps_one_refresh_and_local_expiry(self):
+        from arknights_mower.utils import mastery_sync
+        from arknights_mower.utils.mastery_sync import MasterySync
+
+        scheduler = MagicMock()
+        scheduler.tasks = []
+        plan = {
+            "char_id": "char_test",
+            "skill_index": 1,
+            "status": "in_progress",
+            "level": 1,
+            "expires_at": "2026-08-03 00:00:00",
+        }
+        player_info_module = MagicMock()
+        player_info_module.player_info_cache = {
+            "latest": {
+                "building_training": {
+                    "remainSecs": 7200,
+                    "slotState": 1,
+                    "trainee": {"charId": "char_test"},
+                }
+            }
+        }
+
+        with (
+            patch.object(MasterySync, "_refresh_skland_data"),
+            patch.object(mastery_sync, "has_train_group_plan", return_value=False),
+            patch.object(mastery_sync, "get_in_progress_plan", return_value=plan),
+            patch.object(mastery_sync, "set_plan_status") as set_status,
+            patch.object(mastery_sync._os.path, "exists", return_value=False),
+            patch.dict(
+                "sys.modules",
+                {"arknights_mower.solvers.player_info": player_info_module},
+            ),
+        ):
+            sync = MasterySync(scheduler)
+            sync.sync_and_schedule()
+            first_refresh = scheduler.tasks[0]
+            sync.sync_and_schedule()
+
+        refresh_tasks = [
+            task
+            for task in scheduler.tasks
+            if task.type == TaskTypes.REFRESH_TIME and task.meta_data == "train"
+        ]
+        self.assertEqual(refresh_tasks, [first_refresh])
+        self.assertGreater(
+            first_refresh.time,
+            datetime.now() + timedelta(hours=1, minutes=59),
+        )
+        self.assertLess(
+            first_refresh.time,
+            datetime.now() + timedelta(hours=2, minutes=1),
+        )
+        saved_expiry = datetime.fromisoformat(set_status.call_args.kwargs["expires_at"])
+        self.assertGreater(saved_expiry, datetime.now() + timedelta(hours=1, minutes=59))
+        self.assertLess(saved_expiry, datetime.now() + timedelta(hours=2, minutes=1))
+
+    @patch.object(BaseSchedulerSolver, "__init__", lambda x: None)
+    def test_training_refresh_keeps_one_future_completion_trigger(self):
+        solver = BaseSchedulerSolver()
+        current = SchedulerTask(
+            task_type=TaskTypes.REFRESH_TIME,
+            meta_data="train",
+        )
+        solver.task = current
+        solver.tasks = [current]
+        solver.op_data = MagicMock()
+        solver.op_data.skill_upgrade_supports = []
+        player_info_module = MagicMock()
+        player_info_module.player_info_cache = {
+            "latest": {"building_training": {"trainer": {"charId": "char_optimal"}}}
+        }
+        completion_time = datetime.now() + timedelta(hours=6)
+
+        with (
+            patch.dict(
+                "sys.modules",
+                {"arknights_mower.solvers.player_info": player_info_module},
+            ),
+            patch(
+                "arknights_mower.utils.mastery_recommendation.get_skill_data",
+                return_value={
+                    "characters": {"char_optimal": {"name": "逻各斯"}}
+                },
+            ),
+        ):
+            solver._calculate_swap_from_api(completion_time)
+            future_refresh = solver.tasks[1]
+            solver._calculate_swap_from_api(completion_time)
+
+        self.assertEqual(len(solver.tasks), 2)
+        self.assertIs(solver.tasks[1], future_refresh)
+        self.assertEqual(future_refresh.type, TaskTypes.REFRESH_TIME)
+        self.assertEqual(future_refresh.meta_data, "train")
+        self.assertEqual(future_refresh.time, completion_time)
+
+    @patch.object(BaseSchedulerSolver, "__init__", lambda x: None)
+    def test_training_refresh_exception_keeps_completion_fallback(self):
+        solver = BaseSchedulerSolver()
+        current = SchedulerTask(
+            task_type=TaskTypes.REFRESH_TIME,
+            meta_data="train",
+        )
+        solver.task = current
+        solver.tasks = [current]
+        completion_time = datetime.now() + timedelta(hours=5)
+        player_info_module = MagicMock()
+        player_info_module.player_info_cache = {
+            "latest": {"building_training": {"trainer": {}}}
+        }
+
+        with (
+            patch.dict(
+                "sys.modules",
+                {"arknights_mower.solvers.player_info": player_info_module},
+            ),
+            patch(
+                "arknights_mower.utils.mastery_db.get_in_progress_plan",
+                return_value={
+                    "char_id": "char_test",
+                    "skill_index": 1,
+                },
+            ),
+        ):
+            solver._calculate_swap_from_api(completion_time)
+
+        self.assertEqual(len(solver.tasks), 2)
+        self.assertEqual(solver.tasks[1].type, TaskTypes.REFRESH_TIME)
+        self.assertEqual(solver.tasks[1].meta_data, "train")
+        self.assertEqual(solver.tasks[1].time, completion_time)
+
+    @patch.object(BaseSchedulerSolver, "__init__", lambda x: None)
+    def test_mastery_swap_and_refresh_follow_changed_eta(self):
+        solver = BaseSchedulerSolver()
+        current = SchedulerTask(
+            task_type=TaskTypes.REFRESH_TIME,
+            meta_data="train",
+        )
+        solver.task = current
+        solver.tasks = [current]
+        support = MagicMock()
+        support.name = "Trainer"
+        support.swap_name = "Swap"
+        solver.op_data = MagicMock()
+        solver.op_data.skill_upgrade_supports = [support]
+        solver.op_data.calculate_switch_time.side_effect = [2, 4]
+        player_info_module = MagicMock()
+        player_info_module.player_info_cache = {
+            "latest": {
+                "building_training": {
+                    "trainer": {"charId": "char_trainer"},
+                }
+            }
+        }
+        first_completion = datetime.now() + timedelta(hours=8)
+        second_completion = first_completion + timedelta(hours=1)
+
+        with (
+            patch.dict(
+                "sys.modules",
+                {"arknights_mower.solvers.player_info": player_info_module},
+            ),
+            patch(
+                "arknights_mower.utils.mastery_db.get_in_progress_plan",
+                return_value={
+                    "char_id": "char_test",
+                    "skill_index": 1,
+                },
+            ),
+            patch(
+                "arknights_mower.utils.mastery_recommendation.get_skill_data",
+                return_value={
+                    "characters": {"char_trainer": {"name": "Trainer"}}
+                },
+            ),
+        ):
+            solver._calculate_swap_from_api(first_completion)
+            swap_task = next(
+                task for task in solver.tasks if task.meta_data == "_mastery"
+            )
+            first_swap_time = swap_task.time
+            solver._calculate_swap_from_api(second_completion)
+
+        swap_tasks = [
+            task for task in solver.tasks if task.meta_data == "_mastery"
+        ]
+        refresh_tasks = [
+            task
+            for task in solver.tasks
+            if task is not current
+            and task.type == TaskTypes.REFRESH_TIME
+            and task.meta_data == "train"
+        ]
+        self.assertEqual(swap_tasks, [swap_task])
+        self.assertGreater(swap_task.time, first_swap_time)
+        self.assertEqual(
+            getattr(swap_task, "mastery_plan_key"),
+            "char_test_1",
+        )
+        self.assertEqual(len(refresh_tasks), 1)
+        self.assertEqual(
+            refresh_tasks[0].time,
+            swap_task.time + timedelta(seconds=1),
+        )
+
+    @patch.object(BaseSchedulerSolver, "__init__", lambda x: None)
+    def test_training_completion_brings_existing_next_level_task_due(self):
+        solver = BaseSchedulerSolver()
+        solver.task = SchedulerTask(
+            task_type=TaskTypes.REFRESH_TIME,
+            meta_data="train",
+        )
+        first = SchedulerTask(
+            time=datetime.now() + timedelta(hours=3),
+            task_type=TaskTypes.SKILL_UPGRADE,
+            meta_data="old",
+        )
+        first.plan_key = "char_test_2"
+        duplicate = SchedulerTask(
+            time=datetime.now() + timedelta(hours=4),
+            task_type=TaskTypes.SKILL_UPGRADE,
+            meta_data="duplicate",
+        )
+        duplicate.plan_key = "char_test_2"
+        solver.tasks = [solver.task, first, duplicate]
+        player_info_module = MagicMock()
+        player_info_module.player_info_cache = {
+            "latest": {
+                "building_training": {
+                    "trainee": {
+                        "charId": "char_test",
+                        "targetSkill": -1,
+                    }
+                }
+            }
+        }
+        before = datetime.now()
+
+        with (
+            patch.dict(
+                "sys.modules",
+                {"arknights_mower.solvers.player_info": player_info_module},
+            ),
+            patch(
+                "arknights_mower.utils.mastery_db.get_in_progress_plan",
+                return_value={
+                    "char_id": "char_test",
+                    "skill_index": 2,
+                    "level": 1,
+                },
+            ),
+            patch(
+                "arknights_mower.utils.mastery_db.insert_plan"
+            ) as insert_plan,
+            patch(
+                "arknights_mower.utils.mastery_recommendation.get_skill_data",
+                return_value={
+                    "characters": {"char_test": {"name": "Test"}}
+                },
+            ),
+        ):
+            solver._handle_training_complete()
+
+        next_tasks = [
+            task
+            for task in solver.tasks
+            if task.type == TaskTypes.SKILL_UPGRADE
+            and getattr(task, "plan_key", "") == "char_test_2"
+        ]
+        self.assertEqual(next_tasks, [first])
+        self.assertGreaterEqual(first.time, before)
+        self.assertLessEqual(first.time, datetime.now())
+        self.assertEqual(first.meta_data, "Test 技能3")
+        self.assertEqual(insert_plan.call_count, 2)
+
+    @patch.object(BaseSchedulerSolver, "__init__", lambda x: None)
+    def test_immediate_trade_drone_checks_limit_before_first_acceleration(self):
+        solver = BaseSchedulerSolver()
+        solver.tasks = []
+        solver.task = SchedulerTask()
+        solver.op_data = MagicMock()
+        solver.op_data.run_order_rooms = {"room_1_1": []}
+        solver.drone_room = None
+        solver.recog = MagicMock()
+        solver.digit_reader = MagicMock()
+        solver.digit_reader.get_drone.return_value = 113
+        solver.waiting_scene = set()
+        solver.enter_room = MagicMock()
+        solver.tap = MagicMock()
+        solver.tap_element = MagicMock()
+        solver.accept_order = MagicMock()
+        solver.scene_graph_navigation = MagicMock()
+        bill_accelerate = object()
+        solver.find = MagicMock(
+            side_effect=lambda name, *args, **kwargs: (
+                bill_accelerate if name == "bill_accelerate" else None
+            )
+        )
+
+        with patch.object(base_schedule.config.conf, "drone_count_limit", 120):
+            solver.drone("room_1_1", not_customize=True)
+
+        solver.digit_reader.get_drone.assert_called_once()
+        solver.tap_element.assert_not_called()
+        solver.accept_order.assert_not_called()
 
 class TestMergeRunOrder(unittest.TestCase):
     def _make_run_order(self, time, room):
