@@ -2,6 +2,7 @@
 
 [Unrelease]
 - feat: 首页新增“推迟其他任务”操作，可将下一个跑单前的待执行非跑单任务统一安排到跑单结束后
+- fix: 副表关闭时按最终活动计划生成定向回切任务，避免替班干员持续占岗
 - fix: 修复启动前 MAA 连通性检查时序 [#889](https://github.com/ArkMowers/arknights-mower/pull/889/changes#diff-d6ca44bc67dfb7f8f8516a6b8d8fb0a6ac79dcdb080452b3e86a594b57998eaf) [@ALEXsun0](https://github.com/alexsun0)
 - 优化 MAA 连通性检测 [#901](https://github.com/ArkMowers/arknights-mower/pull/901) [@ALEXsun0](https://github.com/ALEXsun0)
 

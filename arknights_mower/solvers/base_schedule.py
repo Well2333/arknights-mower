@@ -2255,8 +2255,10 @@ class BaseSchedulerSolver(SceneGraphSolver, BaseMixin):
         try:
             new_task = False
             if self.op_data.backup_plans:
+                previous_plan = copy.deepcopy(self.op_data.plan)
                 con = copy.deepcopy(self.op_data.plan_condition)
                 current_con = self.op_data.plan_condition
+                deactivated = []
                 for idx, bp in enumerate(self.op_data.backup_plans):
                     func = str(bp.trigger)
                     logger.debug(func)
@@ -2271,6 +2273,8 @@ class BaseSchedulerSolver(SceneGraphSolver, BaseMixin):
                             self.tasks.append(
                                 SchedulerTask(task_plan=copy.deepcopy(task))
                             )
+                        elif not con[idx]:
+                            deactivated.append(idx)
                     else:
                         # 不切换
                         con[idx] = current_con[idx]
@@ -2281,6 +2285,38 @@ class BaseSchedulerSolver(SceneGraphSolver, BaseMixin):
                     )
                     logger.info(f"新条件列表:{con}")
                     self.op_data.swap_plan(con, refresh=True)
+                    reconciliation = {}
+                    for idx in deactivated:
+                        for room in self.op_data.backup_plans[idx].task:
+                            if (
+                                room not in previous_plan
+                                or room not in self.op_data.plan
+                                or room.startswith("dormitory")
+                            ):
+                                continue
+                            before = previous_plan[room]
+                            after = self.op_data.plan[room]
+                            if len(before) != len(after):
+                                reconciliation[room] = [
+                                    operator.agent for operator in after
+                                ]
+                                continue
+                            target = [
+                                (
+                                    "Current"
+                                    if old.agent == new.agent
+                                    else new.agent
+                                )
+                                for old, new in zip(before, after)
+                            ]
+                            if any(agent != "Current" for agent in target):
+                                reconciliation[room] = target
+                    if reconciliation:
+                        logger.info(f"生成副班回切任务:{reconciliation}")
+                        self.tasks.append(
+                            SchedulerTask(task_plan=reconciliation)
+                        )
+                        new_task = True
                     if append_empty_task and not new_task:
                         self.tasks.append(SchedulerTask(task_plan={}))
             return new_task

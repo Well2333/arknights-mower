@@ -205,10 +205,16 @@ class TestBaseScheduler(unittest.TestCase):
             mock_agent_get_mood.return_value = None
             solver.backup_plan_solver()
             self.assertEqual(len(solver.tasks), 1)
+            solver.tasks = []
             solver.party_time = datetime.now()
-            solver.backup_plan_solver()
+            self.assertTrue(solver.backup_plan_solver())
             self.assertTrue(
                 all(not condition for condition in solver.op_data.plan_condition)
+            )
+            self.assertEqual(len(solver.tasks), 1)
+            self.assertEqual(
+                solver.tasks[0].plan,
+                {"meeting": ["Current", "跃跃"]},
             )
 
     @patch.object(BaseSchedulerSolver, "__init__", lambda x: None)
